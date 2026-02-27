@@ -2,3 +2,8 @@
 
 static/tmp/*
 static/upload/*
+
+# Playwright automation artifacts
+tools/playwright/_tmp/
+tools/playwright/.tmp/
+test-results/

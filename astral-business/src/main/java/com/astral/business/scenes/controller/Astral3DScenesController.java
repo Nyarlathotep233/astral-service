@@ -192,19 +192,22 @@ public class Astral3DScenesController {
     public Result<?> put(@PathVariable("id") String id, @RequestBody Astral3DScenes lb3dEditorScenes) {
         Astral3DScenes oldScenes = astral3DScenesService.getById(id);
         if (oldScenes != null) {
-            String zip = oldScenes.getZip();
-            if (StringUtils.hasLength(zip)) {
+            String oldZip = oldScenes.getZip();
+            String newZip = lb3dEditorScenes.getZip();
+            if (StringUtils.hasLength(oldZip) && StringUtils.hasLength(newZip) && !oldZip.equals(newZip)) {
                 // 删除文件父级的文件夹及其下所有文件
 
-                String folder = zip.substring(0, zip.lastIndexOf("/"));
+                int lastIndex = oldZip.lastIndexOf("/");
+                String folder = lastIndex > 0 ? oldZip.substring(0, lastIndex) : oldZip;
                 if (!CommonUtils.deleteFile(folder)) {
                     throw new RuntimeException(folder + " 删除文件失败");
                 }
             }
             String oldCoverPicture = oldScenes.getCoverPicture();
-            if (StringUtils.hasLength(oldCoverPicture)) {
+            String newCoverPicture = lb3dEditorScenes.getCoverPicture();
+            if (StringUtils.hasLength(oldCoverPicture) && StringUtils.hasLength(newCoverPicture)) {
                 // 判断封面图是否变更
-                if (!oldCoverPicture.equals(lb3dEditorScenes.getCoverPicture())) {
+                if (!oldCoverPicture.equals(newCoverPicture)) {
                     if (!CommonUtils.deleteFile(oldCoverPicture)) {
                         throw new RuntimeException(oldCoverPicture + " 删除文件失败");
                     }

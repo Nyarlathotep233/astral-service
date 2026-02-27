@@ -72,6 +72,10 @@ public class CommonController {
                 filePath = filePath.replaceAll("\\+", "%2B");
                 filePath = URLDecoder.decode(filePath, "UTF-8");
                 File file = new File(filePath);
+                if (!file.exists() || !file.isFile()) {
+                    response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                    return;
+                }
                 if(!file.exists()){
                     response.setStatus(404);
                     throw new RuntimeException("文件["+imgPath+"]不存在..");
@@ -107,8 +111,7 @@ public class CommonController {
                 response.flushBuffer();
             } catch (IOException e) {
                 e.printStackTrace();
-                response.setStatus(404);
-                e.printStackTrace();
+                response.setStatus(HttpServletResponse.SC_NOT_FOUND);
             } finally {
                 if (inputStream != null) {
                     try {

@@ -46,5 +46,9 @@
 >   * 进入生成的jar包目录：cd astral-web/target
 >   * 运行项目：java -jar astral-web-exec.jar
 
+## 用 Docker 打包
+> docker run --rm -v "${PWD}:/workspace" -w /workspace maven:3.9.6-eclipse-temurin-8 mvn -DskipTests clean package
+
+
 ## Star History
 [![Star History Chart](https://api.star-history.com/svg?repos=yx8663/astral-service&type=Date)](https://star-history.com/#yx8663/astral-service&Date)

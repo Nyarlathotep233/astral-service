@@ -42,12 +42,25 @@
 
 ### 方式三(打包)
 > cmd中执行命令：
->   * 生成jar包: mvn clean package
+>   * 生成jar包: mvn -DskipTests clean package
 >   * 进入生成的jar包目录：cd astral-web/target
->   * 运行项目：java -jar astral-web-exec.jar
+>   * 运行项目：java -jar astral-web.jar
 
 ## 用 Docker 打包
+> 先启动 Docker Desktop（否则会报 `dockerDesktopLinuxEngine` 连接失败）
+> 
+> docker info
+> 
 > docker run --rm -v "${PWD}:/workspace" -w /workspace maven:3.9.6-eclipse-temurin-8 mvn -DskipTests clean package
+
+## 本地 JDK 打包（Windows PowerShell）
+> 如果本地 Maven 报错 `No compiler is provided in this environment`，通常是 `JAVA_HOME` 指到了 JRE。
+>
+> ```
+> $env:JAVA_HOME='C:\Program Files\Java\jdk-1.8'
+> $env:Path="$env:JAVA_HOME\bin;$env:Path"
+> mvn -DskipTests clean package
+> ```
 
 
 ## Star History

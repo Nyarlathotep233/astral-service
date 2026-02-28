@@ -5,13 +5,20 @@
 
 基于`Java:8`和`SpringBoot:2.7.18`的 [Astral3D](https://github.com/mlt131220/Astral3D) 项目后端代码.
 
+## ⚠️ Fork 说明
+
+本仓库 Fork 自 [yx8663/astral-service](https://github.com/yx8663/astral-service)，当前仓库为社区维护/二次开发版本，非原作者官方仓库。
+
+- Upstream: https://github.com/yx8663/astral-service
+- 许可证：继承并遵循原项目许可证与相关声明
+
 ![Static Badge](https://img.shields.io/badge/Java-8-green)
 ![Static Badge](https://img.shields.io/badge/SpringBoot-2.7.18-8732D7)
 ![Static Badge](https://img.shields.io/badge/license-MIT-blue)
 
 ## 快速开始
 ```shell
-   git clone https://github.com/yx8663/astral-service.git
+   git clone git@gitlab.haolink.com:zhangzechao/astral-service.git
 ```
 ### 配置
 * 数据库使用 MySQL，表结构数据文件位于： `static/sql/astral_3d.sql`；

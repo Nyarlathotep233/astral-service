@@ -3,6 +3,8 @@ package com.astral.business.scenes.controller;
 import com.alibaba.fastjson2.JSONObject;
 import com.astral.business.scenes.entity.Astral3DScenesExample;
 import com.astral.business.scenes.service.Astral3DScenesExampleService;
+import com.astral.common.config.AstralConfig;
+import com.astral.common.constant.CommonConstant;
 import com.astral.common.result.Result;
 import com.astral.common.utils.CommonUtils;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -14,6 +16,11 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import javax.servlet.http.HttpServletRequest;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -191,36 +198,266 @@ public class Astral3DScenesController {
     @PutMapping("/update/{id}")
     public Result<?> put(@PathVariable("id") String id, @RequestBody Astral3DScenes lb3dEditorScenes) {
         Astral3DScenes oldScenes = astral3DScenesService.getById(id);
-        if (oldScenes != null) {
-            String oldZip = oldScenes.getZip();
-            String newZip = lb3dEditorScenes.getZip();
-            if (StringUtils.hasLength(oldZip) && StringUtils.hasLength(newZip) && !oldZip.equals(newZip)) {
-                // 删除文件父级的文件夹及其下所有文件
+        if (oldScenes == null) {
+            return Result.error("场景不存在");
+        }
 
-                int lastIndex = oldZip.lastIndexOf("/");
-                String folder = lastIndex > 0 ? oldZip.substring(0, lastIndex) : oldZip;
-                if (!CommonUtils.deleteFile(folder)) {
-                    throw new RuntimeException(folder + " 删除文件失败");
-                }
+        SceneUpdateRollbackContext context = null;
+        try {
+            context = createRollbackContext(id, oldScenes, lb3dEditorScenes);
+
+            validateNewAssets(lb3dEditorScenes, context);
+            backupOldAssets(context);
+
+            lb3dEditorScenes.setId(id);
+            boolean updated = astral3DScenesService.updateById(lb3dEditorScenes);
+            if (!updated) {
+                throw new RuntimeException("更新失败");
             }
-            String oldCoverPicture = oldScenes.getCoverPicture();
-            String newCoverPicture = lb3dEditorScenes.getCoverPicture();
-            if (StringUtils.hasLength(oldCoverPicture) && StringUtils.hasLength(newCoverPicture)) {
-                // 判断封面图是否变更
-                if (!oldCoverPicture.equals(newCoverPicture)) {
-                    if (!CommonUtils.deleteFile(oldCoverPicture)) {
-                        throw new RuntimeException(oldCoverPicture + " 删除文件失败");
-                    }
-                }
-            }
-        }
-        lb3dEditorScenes.setId(id);
-        boolean b = astral3DScenesService.updateById(lb3dEditorScenes);
-        if (b) {
+            context.updated = true;
+
+            cleanupOldAssets(context);
+            cleanupBackupAssets(context);
+
             return Result.success(lb3dEditorScenes);
-        } else {
-            return Result.error("更新失败");
+        } catch (Exception e) {
+            e.printStackTrace();
+            rollbackUpdate(id, oldScenes, context);
+            return Result.error("更新失败，已回滚：" + e.getMessage());
         }
+    }
+
+    private SceneUpdateRollbackContext createRollbackContext(String id, Astral3DScenes oldScenes, Astral3DScenes newScenes) {
+        SceneUpdateRollbackContext context = new SceneUpdateRollbackContext();
+        context.sceneId = id;
+        context.localUpload = CommonConstant.UPLOAD_TYPE_LOCAL.equalsIgnoreCase(AstralConfig.getUploadType());
+
+        context.oldZip = oldScenes.getZip();
+        context.newZip = newScenes.getZip();
+        context.oldCoverPicture = oldScenes.getCoverPicture();
+        context.newCoverPicture = newScenes.getCoverPicture();
+
+        context.zipChanged = StringUtils.hasLength(context.oldZip)
+                && StringUtils.hasLength(context.newZip)
+                && !context.oldZip.equals(context.newZip);
+
+        context.coverChanged = StringUtils.hasLength(context.oldCoverPicture)
+                && StringUtils.hasLength(context.newCoverPicture)
+                && !context.oldCoverPicture.equals(context.newCoverPicture);
+
+        if (context.zipChanged) {
+            context.oldZipFolder = extractParentPath(context.oldZip);
+            context.newZipFolder = extractParentPath(context.newZip);
+        }
+
+        return context;
+    }
+
+    private void validateNewAssets(Astral3DScenes newScenes, SceneUpdateRollbackContext context) {
+        if (!context.localUpload) {
+            return;
+        }
+
+        if (StringUtils.hasLength(newScenes.getZip()) && !pathExists(newScenes.getZip())) {
+            throw new RuntimeException("新场景zip文件不存在: " + newScenes.getZip());
+        }
+
+        if (StringUtils.hasLength(newScenes.getCoverPicture())
+                && !isRemotePath(newScenes.getCoverPicture())
+                && !pathExists(newScenes.getCoverPicture())) {
+            throw new RuntimeException("新场景封面不存在: " + newScenes.getCoverPicture());
+        }
+    }
+
+    private void backupOldAssets(SceneUpdateRollbackContext context) throws IOException {
+        if (!context.localUpload) {
+            return;
+        }
+
+        if (!context.zipChanged && !context.coverChanged) {
+            return;
+        }
+
+        Path backupRoot = resolveUploadPath(".scene-save-backup/" + context.sceneId + "/" + System.currentTimeMillis());
+        Files.createDirectories(backupRoot);
+        context.backupRoot = backupRoot;
+
+        if (context.zipChanged && StringUtils.hasLength(context.oldZipFolder) && pathExists(context.oldZipFolder)) {
+            Path sourceZipFolder = resolveUploadPath(context.oldZipFolder);
+            Path backupZipFolder = backupRoot.resolve("zip");
+            copyPath(sourceZipFolder, backupZipFolder);
+            context.backupZipFolder = backupZipFolder;
+        }
+
+        if (context.coverChanged && StringUtils.hasLength(context.oldCoverPicture) && pathExists(context.oldCoverPicture)) {
+            Path sourceCoverFile = resolveUploadPath(context.oldCoverPicture);
+            String extension = getFileExtension(sourceCoverFile.getFileName().toString());
+            Path backupCoverFile = backupRoot.resolve("cover" + extension);
+            copyPath(sourceCoverFile, backupCoverFile);
+            context.backupCoverFile = backupCoverFile;
+        }
+    }
+
+    private void cleanupOldAssets(SceneUpdateRollbackContext context) {
+        // 为了防止误删旧zip后中断，这里先删封面再删zip目录
+        if (context.coverChanged && StringUtils.hasLength(context.oldCoverPicture)) {
+            if (context.localUpload && !pathExists(context.oldCoverPicture)) {
+                // 历史坏数据（数据库指向的旧文件已不存在）直接跳过删除
+            } else if (!CommonUtils.deleteFile(context.oldCoverPicture)) {
+                throw new RuntimeException(context.oldCoverPicture + " 删除文件失败");
+            }
+        }
+
+        if (context.zipChanged && StringUtils.hasLength(context.oldZipFolder)) {
+            if (context.localUpload && !pathExists(context.oldZipFolder)) {
+                // 历史坏数据（数据库指向的旧文件已不存在）直接跳过删除
+            } else if (!CommonUtils.deleteFile(context.oldZipFolder)) {
+                throw new RuntimeException(context.oldZipFolder + " 删除文件失败");
+            }
+        }
+    }
+
+    private void rollbackUpdate(String id, Astral3DScenes oldScenes, SceneUpdateRollbackContext context) {
+        if (context == null) {
+            return;
+        }
+
+        if (context.updated) {
+            try {
+                oldScenes.setId(id);
+                astral3DScenesService.updateById(oldScenes);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        // 删除本次新上传文件，避免失败后堆积垃圾文件
+        if (context.coverChanged && StringUtils.hasLength(context.newCoverPicture)) {
+            safeDelete(context.newCoverPicture);
+        }
+        if (context.zipChanged && StringUtils.hasLength(context.newZipFolder)) {
+            safeDelete(context.newZipFolder);
+        }
+
+        restoreOldAssets(context);
+        cleanupBackupAssets(context);
+    }
+
+    private void restoreOldAssets(SceneUpdateRollbackContext context) {
+        if (!context.localUpload) {
+            return;
+        }
+
+        try {
+            if (context.backupCoverFile != null && StringUtils.hasLength(context.oldCoverPicture)) {
+                Path targetCover = resolveUploadPath(context.oldCoverPicture);
+                copyPath(context.backupCoverFile, targetCover);
+            }
+            if (context.backupZipFolder != null && StringUtils.hasLength(context.oldZipFolder)) {
+                Path targetZipFolder = resolveUploadPath(context.oldZipFolder);
+                copyPath(context.backupZipFolder, targetZipFolder);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void cleanupBackupAssets(SceneUpdateRollbackContext context) {
+        if (context == null || context.backupRoot == null) {
+            return;
+        }
+
+        try {
+            File backupRootFile = context.backupRoot.toFile();
+            if (backupRootFile.exists()) {
+                org.apache.commons.io.FileUtils.deleteDirectory(backupRootFile);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void safeDelete(String relativePath) {
+        try {
+            CommonUtils.deleteFile(relativePath);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private String extractParentPath(String path) {
+        if (!StringUtils.hasLength(path)) {
+            return path;
+        }
+        int lastIndex = path.lastIndexOf("/");
+        return lastIndex > 0 ? path.substring(0, lastIndex) : path;
+    }
+
+    private boolean isRemotePath(String path) {
+        return path.startsWith("http://") || path.startsWith("https://");
+    }
+
+    private boolean pathExists(String relativePath) {
+        if (!StringUtils.hasLength(relativePath)) {
+            return false;
+        }
+        Path path = resolveUploadPath(relativePath);
+        return Files.exists(path);
+    }
+
+    private Path resolveUploadPath(String relativePath) {
+        String fixedPath = relativePath;
+        while (fixedPath.startsWith("/")) {
+            fixedPath = fixedPath.substring(1);
+        }
+        return Paths.get(AstralConfig.getUploadDir(), fixedPath).normalize();
+    }
+
+    private void copyPath(Path source, Path target) throws IOException {
+        File sourceFile = source.toFile();
+        File targetFile = target.toFile();
+
+        if (!sourceFile.exists()) {
+            return;
+        }
+
+        if (sourceFile.isDirectory()) {
+            org.apache.commons.io.FileUtils.copyDirectory(sourceFile, targetFile);
+            return;
+        }
+
+        File parent = targetFile.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
+        org.apache.commons.io.FileUtils.copyFile(sourceFile, targetFile);
+    }
+
+    private String getFileExtension(String fileName) {
+        int dot = fileName.lastIndexOf(".");
+        if (dot >= 0) {
+            return fileName.substring(dot);
+        }
+        return "";
+    }
+
+    private static class SceneUpdateRollbackContext {
+        private String sceneId;
+        private boolean localUpload;
+        private boolean zipChanged;
+        private boolean coverChanged;
+        private boolean updated;
+
+        private String oldZip;
+        private String newZip;
+        private String oldZipFolder;
+        private String newZipFolder;
+        private String oldCoverPicture;
+        private String newCoverPicture;
+
+        private Path backupRoot;
+        private Path backupZipFolder;
+        private Path backupCoverFile;
     }
 
     @DeleteMapping("/del/{id}")

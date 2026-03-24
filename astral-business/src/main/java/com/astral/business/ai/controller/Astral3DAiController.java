@@ -14,6 +14,8 @@ import org.springframework.web.client.RestTemplate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 编辑器 AI 能力
@@ -23,6 +25,8 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/editor3d/ai")
 public class Astral3DAiController {
+    private static final Pattern THINK_BLOCK_PATTERN = Pattern.compile("(?is)<think>(.*?)</think>");
+
 
     @Value("${astral.ai.script.provider:mock}")
     private String aiProvider;
@@ -155,6 +159,7 @@ public class Astral3DAiController {
         response.setScriptName(getScriptName(request));
         response.setSource(generated.getSource());
         response.setExplanation(StringUtils.hasText(generated.getExplanation()) ? generated.getExplanation() : buildExplanation(request));
+        response.setThinking(generated.getThinking());
 
         List<String> warnings = new ArrayList<>();
         warnings.add("请在应用脚本前检查对象名称、生命周期函数与场景命名是否一致。");
@@ -182,22 +187,40 @@ public class Astral3DAiController {
     }
 
     private String buildSystemPrompt() {
-        return "你是 3D 编辑器脚本助手。请按用户需求产出可直接运行的 JavaScript 脚本。"
-                + "只输出 JSON 对象，不要 markdown 代码块。"
-                + "JSON 格式为：{\"source\":\"...\",\"explanation\":\"...\",\"warnings\":[\"...\"]}。"
-                + "source 必须包含完整脚本内容，至少包含 loaded / afterAnimation / onKeyDown 中相关函数。";
+        return "你是 3D 编辑器脚本助手，请按用户需求生成可直接运行的 JavaScript 脚本。"
+                + "输出必须是 JSON 对象，不要 markdown 代码块。"
+                + "JSON 格式：{\"source\":\"...\",\"explanation\":\"...\",\"warnings\":[\"...\"]}。"
+                + "运行时约束：afterAnimation 签名为 (delta, toBeRender)，键盘事件用 onKeyDown(event)。"
+                + "可用内置变量：this, THREE, helper, renderer, scene, camera, controls, timer。"
+                + "若包含连续动画，请在 afterAnimation 中调用 toBeRender(true)。"
+                + "不要虚构不存在的 API、生命周期或参数。"
+                + "尽量在 currentSource 基础上最小改动，避免无关重写。";
     }
 
     private String buildUserPrompt(ScriptRequest request) {
+        String requirement = safeText(request.getRequirement());
         StringBuilder sb = new StringBuilder();
-        sb.append("需求：").append(safeText(request.getRequirement())).append("\n");
+        sb.append("需求：").append(requirement).append("\n");
         sb.append("对象名称：").append(safeText(request.getObjectName())).append("\n");
         sb.append("对象类型：").append(safeText(request.getObjectType())).append("\n");
         sb.append("脚本名称：").append(safeText(getScriptName(request))).append("\n");
         sb.append("脚本模式：").append(safeText(request.getMode())).append("\n");
+        sb.append("脚本 API 速查（精简）：\n");
+        sb.append("- 内置变量：this, THREE, helper, renderer, scene, camera, controls, timer\n");
+        sb.append("- 内置方法：render(delta?)\n");
+        sb.append("- 生命周期：loaded(); beforeAnimation(delta); afterAnimation(delta,toBeRender); beforeRender(delta); afterRender(delta); beforeDestroy(); afterDestroy();\n");
+        sb.append("- 常用事件：onPick/onDoubleClick/onKeyDown/onKeyUp/onPointerDown/onPointerUp/onPointerMove/onTouchStart/onTouchEnd\n");
+        sb.append("- helper：new helper.Animation(this); helper.objectByUuid(uuid)\n");
+        sb.append("生命周期签名提示：loaded() / afterAnimation(delta,toBeRender) / onKeyDown(event)\n");
+        sb.append("建议旋转写法：const step = THREE.MathUtils.degToRad(speedDegPerSec) * delta;\n");
+        sb.append("建议最小模板：\n");
+        sb.append("let target = null;\n");
+        sb.append("function loaded(){ target = scene.getObjectByName(\"").append(escapeJsString(request.getObjectName())).append("\") || this; }\n");
+        sb.append("function afterAnimation(delta, toBeRender){ /* 更新逻辑 */ toBeRender(true); }\n");
+        sb.append("function onKeyDown(event){ /* 键盘交互 */ }\n");
         sb.append("当前脚本（可在其基础上修改）：\n");
         sb.append(limitText(request.getCurrentSource(), 16000)).append("\n");
-        sb.append("要求：尽量保持当前脚本结构，避免无关改动。");
+        sb.append("要求：尽量保持当前脚本结构，避免无关改动；不要使用 window/globalThis 保存状态。");
         return sb.toString();
     }
 
@@ -235,10 +258,19 @@ public class Astral3DAiController {
             return generated;
         }
 
+        ThinkExtraction thinkExtraction = extractThink(content);
+        if (StringUtils.hasText(thinkExtraction.getThinking())) {
+            generated.setThinking(thinkExtraction.getThinking());
+        }
+
+        content = StringUtils.hasText(thinkExtraction.getContent()) ? thinkExtraction.getContent() : content;
         JSONObject json = parseJsonObject(content);
         if (json != null) {
             generated.setSource(json.getString("source"));
             generated.setExplanation(json.getString("explanation"));
+            if (!StringUtils.hasText(generated.getThinking())) {
+                generated.setThinking(json.getString("thinking"));
+            }
 
             JSONArray warnings = json.getJSONArray("warnings");
             if (warnings != null && !warnings.isEmpty()) {
@@ -277,6 +309,52 @@ public class Astral3DAiController {
             }
         }
         return null;
+    }
+
+    private ThinkExtraction extractThink(String content) {
+        ThinkExtraction extraction = new ThinkExtraction();
+        extraction.content = content;
+        extraction.thinking = "";
+
+        if (!StringUtils.hasText(content)) {
+            return extraction;
+        }
+
+        Matcher matcher = THINK_BLOCK_PATTERN.matcher(content);
+        StringBuilder thinking = new StringBuilder();
+        StringBuffer cleaned = new StringBuffer();
+        boolean found = false;
+        while (matcher.find()) {
+            found = true;
+            String block = matcher.group(1);
+            if (StringUtils.hasText(block)) {
+                if (thinking.length() > 0) {
+                    thinking.append("\n\n");
+                }
+                thinking.append(block.trim());
+            }
+            matcher.appendReplacement(cleaned, "");
+        }
+        matcher.appendTail(cleaned);
+
+        if (found) {
+            extraction.thinking = thinking.toString().trim();
+            extraction.content = cleaned.toString().trim();
+            return extraction;
+        }
+
+        // 部分模型可能只输出起始 think 标签，做兜底清洗
+        String normalized = content.trim();
+        if (normalized.toLowerCase().startsWith("<think>")) {
+            int endIdx = normalized.toLowerCase().lastIndexOf("</think>");
+            if (endIdx > 0) {
+                String thinkPart = normalized.substring("<think>".length(), endIdx).trim();
+                String remainPart = normalized.substring(endIdx + "</think>".length()).trim();
+                extraction.thinking = thinkPart;
+                extraction.content = remainPart;
+            }
+        }
+        return extraction;
     }
 
     private String stripCodeFence(String content) {
@@ -419,6 +497,7 @@ public class Astral3DAiController {
         private String source;
         private String explanation;
         private List<String> warnings;
+        private String thinking;
     }
 
     @Data
@@ -436,5 +515,12 @@ public class Astral3DAiController {
         private String source;
         private String explanation;
         private List<String> warnings;
+        private String thinking;
+    }
+
+    @Data
+    public static class ThinkExtraction {
+        private String content;
+        private String thinking;
     }
 }

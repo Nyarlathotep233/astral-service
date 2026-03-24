@@ -1,6 +1,7 @@
 package com.astral.business.ai.controller;
 
 import com.alibaba.fastjson2.JSONArray;
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.astral.common.result.Result;
 import lombok.Data;
@@ -294,18 +295,102 @@ public class Astral3DAiController {
 
     private JSONObject parseJsonObject(String content) {
         String normalized = stripCodeFence(content);
-        try {
-            return JSONObject.parseObject(normalized);
-        } catch (Exception ignore) {
+        if (!StringUtils.hasText(normalized)) {
+            return null;
+        }
+
+        JSONObject direct = tryParseObject(normalized.trim());
+        if (direct != null) {
+            return direct;
+        }
+
+        // case: 模型返回了“JSON 字符串”而不是 JSON 对象
+        Object parsed = tryParseGenericJson(normalized.trim());
+        if (parsed instanceof JSONObject) {
+            return (JSONObject) parsed;
+        }
+        if (parsed instanceof String) {
+            String nested = stripCodeFence(((String) parsed).trim());
+            JSONObject nestedObj = tryParseObject(nested);
+            if (nestedObj != null) {
+                return nestedObj;
+            }
+            JSONObject anchoredNested = parseJsonBySourceAnchor(nested);
+            if (anchoredNested != null) {
+                return anchoredNested;
+            }
+        }
+
+        JSONObject anchored = parseJsonBySourceAnchor(normalized);
+        if (anchored != null) {
+            return anchored;
+        }
+
+        // 兼容部分模型返回：{\"source\":\"...\"}
+        if (normalized.contains("\\\"source\\\"")) {
+            String unescaped = normalized
+                    .replace("\\\"", "\"")
+                    .replace("\\n", "\n")
+                    .replace("\\r", "\r")
+                    .replace("\\t", "\t");
+            JSONObject unescapedObj = tryParseObject(unescaped);
+            if (unescapedObj != null) {
+                return unescapedObj;
+            }
         }
 
         int start = normalized.indexOf('{');
         int end = normalized.lastIndexOf('}');
         if (start >= 0 && end > start) {
             String sub = normalized.substring(start, end + 1);
-            try {
-                return JSONObject.parseObject(sub);
-            } catch (Exception ignore) {
+            return tryParseObject(sub);
+        }
+        return null;
+    }
+
+    private JSONObject tryParseObject(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        try {
+            return JSONObject.parseObject(raw);
+        } catch (Exception ignore) {
+            return null;
+        }
+    }
+
+    private Object tryParseGenericJson(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        try {
+            return JSON.parse(raw);
+        } catch (Exception ignore) {
+            return null;
+        }
+    }
+
+    private JSONObject parseJsonBySourceAnchor(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+
+        String normalized = text.trim();
+        int sourceKeyIdx = normalized.indexOf("\"source\"");
+        if (sourceKeyIdx < 0) {
+            return null;
+        }
+
+        int start = normalized.lastIndexOf('{', sourceKeyIdx);
+        if (start < 0) {
+            return null;
+        }
+
+        for (int end = normalized.lastIndexOf('}'); end > sourceKeyIdx; end = normalized.lastIndexOf('}', end - 1)) {
+            String candidate = normalized.substring(start, end + 1);
+            JSONObject candidateObj = tryParseObject(candidate);
+            if (candidateObj != null && candidateObj.containsKey("source")) {
+                return candidateObj;
             }
         }
         return null;

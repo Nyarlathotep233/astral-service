@@ -19,17 +19,18 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 编辑器 AI 能力
- * A 阶段：mock 打通
- * B 阶段：支持真实模型（失败自动回退 mock）
+ * 编辑器 AI 能力（真实模型）
  */
 @RestController
 @RequestMapping("/editor3d/ai")
 public class Astral3DAiController {
     private static final Pattern THINK_BLOCK_PATTERN = Pattern.compile("(?is)<think>(.*?)</think>");
+    private static final int DEFAULT_TIMEOUT_MS = 90000;
+    private static final int MIN_TIMEOUT_MS = 5000;
+    private static final int MAX_TIMEOUT_MS = 300000;
 
 
-    @Value("${astral.ai.script.provider:mock}")
+    @Value("${astral.ai.script.provider:openai-compatible}")
     private String aiProvider;
 
     @Value("${astral.ai.script.endpoint:https://api.openai.com/v1/chat/completions}")
@@ -41,7 +42,7 @@ public class Astral3DAiController {
     @Value("${astral.ai.script.model:gpt-4o-mini}")
     private String aiModel;
 
-    @Value("${astral.ai.script.timeoutMs:30000}")
+    @Value("${astral.ai.script.timeoutMs:90000}")
     private Integer aiTimeoutMs;
 
     @Value("${astral.ai.script.temperature:0.2}")
@@ -52,9 +53,8 @@ public class Astral3DAiController {
         ScriptStatusResponse response = new ScriptStatusResponse();
         boolean liveReady = isLiveReady();
 
-        response.setProvider(liveReady ? "live" : "mock");
+        response.setProvider(safeText(aiProvider));
         response.setLiveReady(liveReady);
-        response.setMockOnly(!liveReady);
         response.setModel(aiModel);
         response.setEndpoint(maskEndpoint(aiEndpoint));
         response.setMessage(buildStatusMessage(liveReady));
@@ -67,51 +67,100 @@ public class Astral3DAiController {
             return Result.error("需求不能为空");
         }
 
-        ScriptResponse response;
-        if (isLiveReady()) {
-            try {
-                response = generateByLiveModel(request);
-            } catch (Exception ex) {
-                response = buildMockResponse(request);
-                response.getWarnings().add(0, "真实模型调用失败，已自动回退 Mock：" + shortenMessage(ex.getMessage()));
-            }
-        } else {
-            response = buildMockResponse(request);
-            if (isLiveProvider()) {
-                response.getWarnings().add(0, "未配置可用 API Key，当前使用 Mock。");
-            }
+        RuntimeAiConfig runtimeAiConfig = resolveRuntimeAiConfig(request);
+        if (!isLiveReady(runtimeAiConfig)) {
+            return Result.error(buildRuntimeNotReadyMessage(runtimeAiConfig));
         }
 
-        return Result.success(response);
-    }
-
-    /**
-     * 兼容保留：只返回 mock
-     */
-    @PostMapping("/script/mock")
-    public Result<?> generateScriptMock(@RequestBody ScriptRequest request) {
-        if (request == null || !StringUtils.hasText(request.getRequirement())) {
-            return Result.error("需求不能为空");
+        try {
+            ScriptResponse response = generateByLiveModel(request, runtimeAiConfig);
+            return Result.success(response);
+        } catch (Exception ex) {
+            return Result.error("AI 生成失败：" + shortenMessage(ex.getMessage()));
         }
-        return Result.success(buildMockResponse(request));
     }
 
     private boolean isLiveProvider() {
         return "openai".equalsIgnoreCase(aiProvider) || "openai-compatible".equalsIgnoreCase(aiProvider);
     }
 
+    private boolean isLiveProvider(String provider) {
+        if (!StringUtils.hasText(provider)) {
+            return false;
+        }
+        return "openai".equalsIgnoreCase(provider) || "openai-compatible".equalsIgnoreCase(provider);
+    }
+
     private boolean isLiveReady() {
         return isLiveProvider() && StringUtils.hasText(aiApiKey);
+    }
+
+    private boolean isLiveReady(RuntimeAiConfig runtimeAiConfig) {
+        return runtimeAiConfig != null
+                && isLiveProvider(runtimeAiConfig.getProvider())
+                && StringUtils.hasText(runtimeAiConfig.getApiKey());
+    }
+
+    private RuntimeAiConfig resolveRuntimeAiConfig(ScriptRequest request) {
+        RuntimeAiConfig cfg = new RuntimeAiConfig();
+        cfg.setProvider(firstNonBlank(request == null ? null : request.getProvider(), aiProvider));
+        cfg.setEndpoint(firstNonBlank(request == null ? null : request.getEndpoint(), aiEndpoint));
+        cfg.setApiKey(firstNonBlank(request == null ? null : request.getApiKey(), aiApiKey));
+        cfg.setModel(firstNonBlank(request == null ? null : request.getModel(), aiModel));
+        cfg.setTemperature(firstNonNull(request == null ? null : request.getTemperature(), aiTemperature == null ? 0.2 : aiTemperature));
+        cfg.setTimeoutMs(resolveTimeoutMs(request == null ? null : request.getTimeoutMs()));
+        return cfg;
+    }
+
+    private int resolveTimeoutMs(Integer requestTimeout) {
+        int timeout = requestTimeout != null ? requestTimeout : (aiTimeoutMs == null ? DEFAULT_TIMEOUT_MS : aiTimeoutMs);
+        if (timeout < MIN_TIMEOUT_MS) {
+            return MIN_TIMEOUT_MS;
+        }
+        if (timeout > MAX_TIMEOUT_MS) {
+            return MAX_TIMEOUT_MS;
+        }
+        return timeout;
+    }
+
+    private String firstNonBlank(String requestValue, String defaultValue) {
+        if (StringUtils.hasText(requestValue)) {
+            return requestValue.trim();
+        }
+        return defaultValue == null ? "" : defaultValue.trim();
+    }
+
+    private <T> T firstNonNull(T requestValue, T defaultValue) {
+        return requestValue != null ? requestValue : defaultValue;
     }
 
     private String buildStatusMessage(boolean liveReady) {
         if (liveReady) {
             return "已配置 API Key，将调用真实模型。";
         }
-        if (isLiveProvider()) {
-            return "provider 已设为真实模型，但 API Key 未配置，当前自动使用 Mock。";
+        if (!isLiveProvider()) {
+            return "provider 不受支持，请设置为 openai 或 openai-compatible。";
         }
-        return "当前 provider=mock，返回 Mock 结果。";
+        return "provider 已设为真实模型，但 API Key 未配置。";
+    }
+
+    private String buildRuntimeNotReadyMessage(RuntimeAiConfig runtimeAiConfig) {
+        if (runtimeAiConfig == null) {
+            return "AI 配置缺失。";
+        }
+        if (!isLiveProvider(runtimeAiConfig.getProvider())) {
+            return "provider 不受支持，请使用 openai 或 openai-compatible。";
+        }
+        if (!StringUtils.hasText(runtimeAiConfig.getApiKey())) {
+            return "未配置可用 API Key。";
+        }
+        if (!StringUtils.hasText(runtimeAiConfig.getEndpoint())) {
+            return "未配置 endpoint。";
+        }
+        if (!StringUtils.hasText(runtimeAiConfig.getModel())) {
+            return "未配置 model。";
+        }
+        return "AI 配置无效。";
     }
 
     private String maskEndpoint(String endpoint) {
@@ -126,10 +175,10 @@ public class Astral3DAiController {
         return normalized;
     }
 
-    private ScriptResponse generateByLiveModel(ScriptRequest request) {
+    private ScriptResponse generateByLiveModel(ScriptRequest request, RuntimeAiConfig runtimeAiConfig) {
         JSONObject payload = new JSONObject();
-        payload.put("model", aiModel);
-        payload.put("temperature", aiTemperature == null ? 0.2 : aiTemperature);
+        payload.put("model", runtimeAiConfig.getModel());
+        payload.put("temperature", runtimeAiConfig.getTemperature());
 
         JSONArray messages = new JSONArray();
         messages.add(createMessage("system", buildSystemPrompt()));
@@ -138,10 +187,11 @@ public class Astral3DAiController {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(aiApiKey.trim());
+        headers.setBearerAuth(runtimeAiConfig.getApiKey().trim());
 
         HttpEntity<String> httpEntity = new HttpEntity<>(payload.toJSONString(), headers);
-        ResponseEntity<String> rawResponse = createRestTemplate().postForEntity(aiEndpoint, httpEntity, String.class);
+        ResponseEntity<String> rawResponse = createRestTemplate(runtimeAiConfig.getTimeoutMs())
+                .postForEntity(runtimeAiConfig.getEndpoint(), httpEntity, String.class);
 
         if (!rawResponse.getStatusCode().is2xxSuccessful()) {
             throw new IllegalStateException("HTTP " + rawResponse.getStatusCodeValue());
@@ -156,7 +206,7 @@ public class Astral3DAiController {
         ScriptResponse response = new ScriptResponse();
         response.setRequestId(UUID.randomUUID().toString());
         response.setProvider("live");
-        response.setModel(aiModel);
+        response.setModel(runtimeAiConfig.getModel());
         response.setScriptName(getScriptName(request));
         response.setSource(generated.getSource());
         response.setExplanation(StringUtils.hasText(generated.getExplanation()) ? generated.getExplanation() : buildExplanation(request));
@@ -172,9 +222,9 @@ public class Astral3DAiController {
         return response;
     }
 
-    private RestTemplate createRestTemplate() {
+    private RestTemplate createRestTemplate(int timeoutMs) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        int timeout = aiTimeoutMs == null ? 30000 : aiTimeoutMs;
+        int timeout = timeoutMs <= 0 ? DEFAULT_TIMEOUT_MS : timeoutMs;
         requestFactory.setConnectTimeout(timeout);
         requestFactory.setReadTimeout(timeout);
         return new RestTemplate(requestFactory);
@@ -478,6 +528,17 @@ public class Astral3DAiController {
         return text == null ? "" : text.trim();
     }
 
+    private String escapeJsString(String input) {
+        if (input == null) {
+            return "";
+        }
+        return input
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", " ");
+    }
+
     private String limitText(String text, int maxLength) {
         if (!StringUtils.hasText(text) || maxLength <= 0) {
             return "";
@@ -489,22 +550,6 @@ public class Astral3DAiController {
         return normalized.substring(0, maxLength) + "\n/* ... truncated ... */";
     }
 
-    private ScriptResponse buildMockResponse(ScriptRequest request) {
-        ScriptResponse response = new ScriptResponse();
-        response.setRequestId(UUID.randomUUID().toString());
-        response.setProvider("mock");
-        response.setModel("mock-script-v1");
-        response.setScriptName(getScriptName(request));
-        response.setSource(buildMockSource(request));
-        response.setExplanation(buildExplanation(request));
-
-        List<String> warnings = new ArrayList<>();
-        warnings.add("当前为 mock 结果，仅用于前后端链路验证。");
-        warnings.add("请在应用脚本前检查对象名称和逻辑是否符合场景。");
-        response.setWarnings(warnings);
-        return response;
-    }
-
     private String getScriptName(ScriptRequest request) {
         if (request != null && StringUtils.hasText(request.getScriptName())) {
             return request.getScriptName();
@@ -512,53 +557,9 @@ public class Astral3DAiController {
         return "AI_Generated_Script";
     }
 
-    private String buildMockSource(ScriptRequest request) {
-        String objectName = escapeJsString(request.getObjectName());
-        String requirement = escapeJsString(request.getRequirement());
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("/**\n");
-        sb.append(" * AI Mock Generated Script\n");
-        sb.append(" * requirement: ").append(requirement).append("\n");
-        sb.append(" */\n\n");
-        sb.append("const CONFIG = {\n");
-        sb.append("  autoRotate: true,\n");
-        sb.append("  speedDegPerSec: 18,\n");
-        sb.append("};\n\n");
-        sb.append("let target = null;\n\n");
-        sb.append("function loaded() {\n");
-        sb.append("  target = scene.getObjectByName(\"").append(objectName).append("\") || this;\n");
-        sb.append("}\n\n");
-        sb.append("function afterAnimation(delta, toBeRender) {\n");
-        sb.append("  if (!CONFIG.autoRotate || !target) return;\n");
-        sb.append("  const step = THREE.MathUtils.degToRad(CONFIG.speedDegPerSec) * delta;\n");
-        sb.append("  target.rotation.y += step;\n");
-        sb.append("  toBeRender(true);\n");
-        sb.append("}\n\n");
-        sb.append("function onKeyDown(event) {\n");
-        sb.append("  if (event.key === \" \") {\n");
-        sb.append("    CONFIG.autoRotate = !CONFIG.autoRotate;\n");
-        sb.append("    console.log(\"autoRotate =\", CONFIG.autoRotate);\n");
-        sb.append("  }\n");
-        sb.append("}\n");
-
-        return sb.toString();
-    }
-
     private String buildExplanation(ScriptRequest request) {
         String object = StringUtils.hasText(request.getObjectName()) ? request.getObjectName() : "当前对象";
-        return "已为对象 " + object + " 生成一个最小可运行示例：loaded 绑定目标对象，afterAnimation 按 Y 轴匀速旋转，空格键切换自动旋转。";
-    }
-
-    private String escapeJsString(String input) {
-        if (input == null) {
-            return "";
-        }
-        return input
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", " ")
-                .replace("\r", " ");
+        return "已为对象 " + object + " 生成脚本，请在应用前检查对象名称、生命周期函数和场景逻辑。";
     }
 
     @Data
@@ -571,6 +572,12 @@ public class Astral3DAiController {
         private String currentSource;
         private String requirement;
         private String mode;
+        private String provider;
+        private String endpoint;
+        private String apiKey;
+        private String model;
+        private Integer timeoutMs;
+        private Double temperature;
     }
 
     @Data
@@ -589,7 +596,6 @@ public class Astral3DAiController {
     public static class ScriptStatusResponse {
         private String provider;
         private boolean liveReady;
-        private boolean mockOnly;
         private String model;
         private String endpoint;
         private String message;
@@ -607,5 +613,15 @@ public class Astral3DAiController {
     public static class ThinkExtraction {
         private String content;
         private String thinking;
+    }
+
+    @Data
+    public static class RuntimeAiConfig {
+        private String provider;
+        private String endpoint;
+        private String apiKey;
+        private String model;
+        private Integer timeoutMs;
+        private Double temperature;
     }
 }

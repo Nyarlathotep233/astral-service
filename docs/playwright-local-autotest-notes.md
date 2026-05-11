@@ -52,10 +52,7 @@ Verified flow:
 - Opening editor from project card can fail in some runs (popup event timing).
   - Keep fallback: open `/#/editor/:id` directly using scene id from add API response.
 
-## Suggested assertion order for future AI tests
-1. Assert create API success (`/scenes/add`).
-2. Assert editor is fully initialized (`window.viewer` exists).
-3. Perform scene mutation and assert names are visible in scene tree.
-4. Assert save dialog appears after clicking save.
-5. Assert update API success and version increments.
-6. Assert upload API called at least twice.
+## AI test note
+Editor AI generation is no longer served by `astral-service`. The editor now
+reuses `astral-llm-service` streaming API (`/api/chat/stream` via
+`/llm-api/chat/stream`). Keep this backend test focused on scene/upload/save APIs.

@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -63,6 +64,29 @@ public class H3DOpenApiScenesController {
                 .collect(Collectors.toList());
 
         return Result.success(result);
+    }
+
+    @GetMapping("/{sceneId}")
+    public Result<?> sceneDetail(@RequestHeader(value = API_KEY_HEADER, required = false) String apiKey,
+                                 @PathVariable("sceneId") String sceneId) {
+        Result<?> authResult = validateApiKey(apiKey);
+        if (authResult != null) {
+            return authResult;
+        }
+
+        String currentSceneId = trim(sceneId);
+        if (!StringUtils.hasText(currentSceneId)) {
+            return Result.error("sceneId不能为空");
+        }
+
+        Astral3DScenes scene = astral3DScenesService.getById(currentSceneId);
+        // 当前删除是物理删除；如果以后改成逻辑删除，delTag=1 必须继续视为不存在，
+        // 避免外部系统继续引用已删除场景。
+        if (scene == null || Integer.valueOf(1).equals(scene.getDelTag())) {
+            return Result.success(toSceneNotFoundResponse(currentSceneId));
+        }
+
+        return Result.success(toSceneDetailResponse(scene));
     }
 
     @PostMapping({"", "/"})
@@ -210,6 +234,47 @@ public class H3DOpenApiScenesController {
         item.put("sceneSource", scene.getSceneSource());
         item.put("exampleSceneId", scene.getExampleSceneId());
         return item;
+    }
+
+    private JSONObject toSceneNotFoundResponse(String sceneId) {
+        JSONObject item = new JSONObject();
+        item.put("exists", false);
+        item.put("sceneId", sceneId);
+        return item;
+    }
+
+    private JSONObject toSceneDetailResponse(Astral3DScenes scene) {
+        JSONObject item = new JSONObject();
+        item.put("exists", true);
+        item.put("sceneId", scene.getId());
+        item.put("sceneName", scene.getSceneName());
+        item.put("sceneType", scene.getSceneType());
+        item.put("sceneIntroduction", scene.getSceneIntroduction());
+        item.put("sceneSource", scene.getSceneSource());
+        item.put("projectType", scene.getProjectType());
+        item.put("coverPicture", resolveCoverPicture(scene));
+        item.put("externalSystem", scene.getExternalSystem());
+        item.put("externalBizId", scene.getExternalBizId());
+        item.put("exampleSceneId", scene.getExampleSceneId());
+        item.put("createTime", scene.getCreateTime());
+        item.put("updateTime", scene.getUpdateTime());
+        return item;
+    }
+
+    private String resolveCoverPicture(Astral3DScenes scene) {
+        if (StringUtils.hasText(scene.getCoverPicture())) {
+            return scene.getCoverPicture();
+        }
+        if (!StringUtils.hasText(scene.getExampleSceneId())) {
+            return scene.getCoverPicture();
+        }
+
+        Astral3DScenesExample example = astral3DScenesExampleService.getById(scene.getExampleSceneId());
+        if (example != null && !Integer.valueOf(1).equals(example.getDelTag())
+                && StringUtils.hasText(example.getCoverPicture())) {
+            return example.getCoverPicture();
+        }
+        return scene.getCoverPicture();
     }
 
     private String resolveString(String first, String second, String fallback) {

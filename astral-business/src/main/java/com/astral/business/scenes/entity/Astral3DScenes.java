@@ -63,6 +63,22 @@ public class Astral3DScenes {
     @TableField("cesiumConfig")
     private String cesiumConfig;
 
+    //场景来源：INTERNAL 前端内部创建，EXTERNAL 外部系统创建
+    @TableField("sceneSource")
+    private String sceneSource;
+
+    //外部系统标识
+    @TableField("externalSystem")
+    private String externalSystem;
+
+    //外部系统业务ID
+    @TableField("externalBizId")
+    private String externalBizId;
+
+    //外部系统扩展元数据JSON
+    @TableField("externalMeta")
+    private String externalMeta;
+
     //删除标记，0 未删除 1 已删除
     @TableField("delTag")
     private Integer delTag;

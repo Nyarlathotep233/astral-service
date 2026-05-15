@@ -12,6 +12,8 @@ public class AstralConfig {
 
     private static String uploadDir;
 
+    private static String externalApiKey;
+
     public static String getUploadType() {
         return uploadType;
     }
@@ -26,5 +28,13 @@ public class AstralConfig {
 
     public void setUploadDir(String uploadDir) {
         AstralConfig.uploadDir = uploadDir;
+    }
+
+    public static String getExternalApiKey() {
+        return externalApiKey;
+    }
+
+    public void setExternalApiKey(String externalApiKey) {
+        AstralConfig.externalApiKey = externalApiKey;
     }
 }

@@ -44,10 +44,14 @@ public class Astral3DScenesController {
      */
     @PostMapping("/add")
     public Result<?> post(@RequestBody Astral3DScenes lb3dEditorScenes) {
-        long count = astral3DScenesService.count();
+        long count = astral3DScenesService.count(new QueryWrapper<Astral3DScenes>().eq("sceneSource", "INTERNAL"));
         if (count > 2000) {
             return Result.error("共享项目场景数量已达上限（2000个），不允许新增");
         }
+        lb3dEditorScenes.setSceneSource("INTERNAL");
+        lb3dEditorScenes.setExternalSystem(null);
+        lb3dEditorScenes.setExternalBizId(null);
+        lb3dEditorScenes.setExternalMeta(null);
         if (astral3DScenesService.save(lb3dEditorScenes)) {
             return Result.success(lb3dEditorScenes);
         } else {
@@ -462,6 +466,9 @@ public class Astral3DScenesController {
 
     @DeleteMapping("/del/{id}")
     public Result<?> delete(@PathVariable String id) {
+        // 当前 removeById 对 astral_3d_scenes 是物理删除。
+        // 如果以后改成逻辑删除，需要同步检查 H3DOpenApiScenesController.findExternalScene 的幂等查询，
+        // 避免外部接口用相同 externalSystem + externalBizId 重新创建时命中已删除记录。
         return Result.toAjax(astral3DScenesService.removeById(id));
     }
 }

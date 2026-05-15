@@ -3,6 +3,8 @@ server:
   servlet:
     context-path: /api
 spring:
+  application:
+    name: astral
   servlet:
     multipart:
       max-file-size: 100MB
@@ -51,6 +53,8 @@ logging:
 astral:
   # 文件上传方式：本地-local 又拍云-upyun
   uploadType: "local"
+  # 外部系统 OpenAPI 调用密钥。未配置时外部接口会拒绝访问。
+  externalApiKey: ${H3D_EXTERNAL_API_KEY:}
   # 资源目录
   # 本地资源目录
   uploadDir: "D:/java/astral-service/static"

@@ -14,6 +14,8 @@ public class AstralConfig {
 
     private static String externalApiKey;
 
+    private static String adminApiKey;
+
     public static String getUploadType() {
         return uploadType;
     }
@@ -36,5 +38,13 @@ public class AstralConfig {
 
     public void setExternalApiKey(String externalApiKey) {
         AstralConfig.externalApiKey = externalApiKey;
+    }
+
+    public static String getAdminApiKey() {
+        return adminApiKey;
+    }
+
+    public void setAdminApiKey(String adminApiKey) {
+        AstralConfig.adminApiKey = adminApiKey;
     }
 }

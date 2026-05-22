@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 /**
  * 外部系统场景 OpenAPI。
@@ -38,6 +39,7 @@ public class H3DOpenApiScenesController {
     private static final String API_KEY_HEADER = "X-H3D-Api-Key";
     private static final String SCENE_SOURCE_EXTERNAL = "EXTERNAL";
     private static final String DEFAULT_SCENE_TYPE = "其他";
+    private static final Pattern TEMPLATE_KEY_PATTERN = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$");
 
     @Autowired
     private Astral3DScenesService astral3DScenesService;
@@ -116,9 +118,22 @@ public class H3DOpenApiScenesController {
 
         Astral3DScenesExample template = null;
         String templateId = trim(request.getTemplateId());
+        String templateKey = normalizeTemplateKey(request.getTemplateKey());
+        String templateKeyError = validateTemplateKeyFormat(templateKey);
+        if (templateKeyError != null) {
+            return Result.error(templateKeyError);
+        }
         if (StringUtils.hasText(templateId)) {
             template = astral3DScenesExampleService.getById(templateId);
             if (template == null || Integer.valueOf(1).equals(template.getDelTag())) {
+                return Result.error("模板不存在");
+            }
+            if (StringUtils.hasText(templateKey) && !templateKey.equals(template.getTemplateKey())) {
+                return Result.error("templateId和templateKey不匹配");
+            }
+        } else if (StringUtils.hasText(templateKey)) {
+            template = findTemplateByKey(templateKey);
+            if (template == null) {
                 return Result.error("模板不存在");
             }
         }
@@ -215,9 +230,21 @@ public class H3DOpenApiScenesController {
         );
     }
 
+    private Astral3DScenesExample findTemplateByKey(String templateKey) {
+        return astral3DScenesExampleService.getOne(
+                new QueryWrapper<Astral3DScenesExample>()
+                        .eq("templateKey", templateKey)
+                        .eq("delTag", 0)
+                        .last("LIMIT 1"),
+                false
+        );
+    }
+
     private JSONObject toTemplateResponse(Astral3DScenesExample example) {
         JSONObject item = new JSONObject();
         item.put("templateId", example.getId());
+        item.put("templateKey", example.getTemplateKey());
+        item.put("templateMeta", example.getTemplateMeta());
         item.put("sceneName", example.getSceneName());
         item.put("sceneType", example.getSceneType());
         item.put("sceneIntroduction", example.getSceneIntroduction());
@@ -314,6 +341,23 @@ public class H3DOpenApiScenesController {
         return JSON.toJSONString(value);
     }
 
+    private String validateTemplateKeyFormat(String templateKey) {
+        if (!StringUtils.hasText(templateKey)) {
+            return null;
+        }
+        if (!TEMPLATE_KEY_PATTERN.matcher(templateKey).matches()) {
+            return "templateKey格式不正确，仅支持字母、数字、下划线、中划线，且必须以字母或数字开头，最长64位";
+        }
+        return null;
+    }
+
+    private String normalizeTemplateKey(String templateKey) {
+        if (!StringUtils.hasText(templateKey)) {
+            return null;
+        }
+        return templateKey.trim();
+    }
+
     private String trim(String value) {
         return value == null ? null : value.trim();
     }
@@ -324,6 +368,7 @@ public class H3DOpenApiScenesController {
         private String externalBizId;
         private String sceneName;
         private String templateId;
+        private String templateKey;
         private String sceneType;
         private String sceneIntroduction;
         private Integer projectType;

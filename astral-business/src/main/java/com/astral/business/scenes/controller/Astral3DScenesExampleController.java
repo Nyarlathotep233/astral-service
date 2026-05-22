@@ -9,10 +9,12 @@ import com.astral.common.config.AstralConfig;
 import com.astral.common.constant.CommonConstant;
 import com.astral.common.result.Result;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.Data;
 import org.apache.commons.io.FileUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -25,6 +27,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 /**
  * 新建场景时的示例表(Astral3DScenesExample)表控制层
@@ -36,6 +39,7 @@ public class Astral3DScenesExampleController {
     private static final String ADMIN_KEY_HEADER = "X-H3D-Admin-Key";
     private static final String TEMPLATE_PACKAGE_DIR = "example/scenes/packages";
     private static final String TEMPLATE_SCREENSHOT_DIR = "example/scenes/screenshot";
+    private static final Pattern TEMPLATE_KEY_PATTERN = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$");
 
     /**
      * 服务对象
@@ -58,11 +62,21 @@ public class Astral3DScenesExampleController {
             return authResult;
         }
 
+        lb3dEditorScenesExample.setTemplateKey(normalizeTemplateKey(lb3dEditorScenesExample.getTemplateKey()));
+        Result<?> templateKeyResult = validateTemplateKey(lb3dEditorScenesExample.getTemplateKey(), null);
+        if (templateKeyResult != null) {
+            return templateKeyResult;
+        }
+
         applyTemplateDefaults(lb3dEditorScenesExample);
-        if (astral3DScenesExampleService.save(lb3dEditorScenesExample)) {
-            return Result.success(lb3dEditorScenesExample);
-        } else {
-            return Result.error("新增失败");
+        try {
+            if (astral3DScenesExampleService.save(lb3dEditorScenesExample)) {
+                return Result.success(lb3dEditorScenesExample);
+            } else {
+                return Result.error("新增失败");
+            }
+        } catch (DuplicateKeyException e) {
+            return Result.error("模板Key已存在");
         }
 
     }
@@ -100,6 +114,12 @@ public class Astral3DScenesExampleController {
             return Result.error("源场景封面不存在");
         }
 
+        String templateKey = normalizeTemplateKey(request == null ? null : request.getTemplateKey());
+        Result<?> templateKeyResult = validateTemplateKey(templateKey, null);
+        if (templateKeyResult != null) {
+            return templateKeyResult;
+        }
+
         String templateId = UUID.randomUUID().toString();
         String coverExtension = getFileExtension(sourceCoverFile.getFileName().toString());
         if (!StringUtils.hasText(coverExtension)) {
@@ -120,6 +140,8 @@ public class Astral3DScenesExampleController {
 
             Astral3DScenesExample template = new Astral3DScenesExample();
             template.setId(templateId);
+            template.setTemplateKey(templateKey);
+            template.setTemplateMeta(request == null ? null : request.getTemplateMeta());
             template.setSceneName(resolveString(request == null ? null : request.getSceneName(), scene.getSceneName(), "未命名模板"));
             template.setSceneType(resolveString(request == null ? null : request.getSceneType(), scene.getSceneType(), "其他"));
             template.setSceneVersion(scene.getSceneVersion() == null ? 1 : scene.getSceneVersion());
@@ -136,6 +158,12 @@ public class Astral3DScenesExampleController {
                 throw new RuntimeException("保存模板失败");
             }
             return Result.success(template);
+        } catch (DuplicateKeyException e) {
+            if (copied) {
+                safeDeletePath(targetZipFolder);
+                safeDeletePath(targetCoverFile);
+            }
+            return Result.error("模板Key已存在");
         } catch (Exception e) {
             if (copied) {
                 safeDeletePath(targetZipFolder);
@@ -256,8 +284,18 @@ public class Astral3DScenesExampleController {
             return authResult;
         }
 
+        lb3dEditorScenesExample.setTemplateKey(normalizeTemplateKey(lb3dEditorScenesExample.getTemplateKey()));
+        Result<?> templateKeyResult = validateTemplateKey(lb3dEditorScenesExample.getTemplateKey(), id);
+        if (templateKeyResult != null) {
+            return templateKeyResult;
+        }
+
         lb3dEditorScenesExample.setId(id);
-        return Result.toAjax(astral3DScenesExampleService.updateById(lb3dEditorScenesExample));
+        try {
+            return Result.toAjax(astral3DScenesExampleService.updateById(lb3dEditorScenesExample));
+        } catch (DuplicateKeyException e) {
+            return Result.error("模板Key已存在");
+        }
     }
 
     @DeleteMapping("/{id}")
@@ -274,7 +312,13 @@ public class Astral3DScenesExampleController {
         }
         example.setDelTag(1);
         example.setDelTime(new Date());
-        return Result.toAjax(astral3DScenesExampleService.updateById(example));
+        return Result.toAjax(astral3DScenesExampleService.update(
+                new UpdateWrapper<Astral3DScenesExample>()
+                        .eq("id", id)
+                        .set("delTag", 1)
+                        .set("delTime", new Date())
+                        .set("templateKey", null)
+        ));
     }
 
     private Result<?> validateAdminKey(String adminKey) {
@@ -283,6 +327,32 @@ public class Astral3DScenesExampleController {
             return Result.error401("Invalid admin key");
         }
         return null;
+    }
+
+    private Result<?> validateTemplateKey(String templateKey, String currentId) {
+        if (!StringUtils.hasText(templateKey)) {
+            return null;
+        }
+        if (!TEMPLATE_KEY_PATTERN.matcher(templateKey).matches()) {
+            return Result.error("模板Key格式不正确，仅支持字母、数字、下划线、中划线，且必须以字母或数字开头，最长64位");
+        }
+
+        QueryWrapper<Astral3DScenesExample> queryWrapper = new QueryWrapper<Astral3DScenesExample>()
+                .eq("templateKey", templateKey);
+        if (StringUtils.hasText(currentId)) {
+            queryWrapper.ne("id", currentId);
+        }
+        if (astral3DScenesExampleService.count(queryWrapper) > 0) {
+            return Result.error("模板Key已存在");
+        }
+        return null;
+    }
+
+    private String normalizeTemplateKey(String templateKey) {
+        if (!StringUtils.hasText(templateKey)) {
+            return null;
+        }
+        return templateKey.trim();
     }
 
     private void applyTemplateDefaults(Astral3DScenesExample template) {
@@ -386,6 +456,8 @@ public class Astral3DScenesExampleController {
         private String sceneName;
         private String sceneType;
         private String sceneIntroduction;
+        private String templateKey;
+        private String templateMeta;
     }
 }
 

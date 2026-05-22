@@ -20,6 +20,14 @@ public class Astral3DScenesExample {
     @TableId(type = IdType.ASSIGN_UUID)
     private String id;
 
+    //模板稳定业务Key
+    @TableField("templateKey")
+    private String templateKey;
+
+    //模板扩展元数据JSON
+    @TableField("templateMeta")
+    private String templateMeta;
+
     //场景类型
     @TableField("sceneType")
     private String sceneType;

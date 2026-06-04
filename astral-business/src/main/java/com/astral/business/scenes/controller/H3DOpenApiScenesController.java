@@ -157,7 +157,10 @@ public class H3DOpenApiScenesController {
 
     private Result<?> validateApiKey(String apiKey) {
         String expected = AstralConfig.getExternalApiKey();
-        if (!StringUtils.hasText(expected) || !expected.equals(apiKey)) {
+        if (!StringUtils.hasText(expected)) {
+            return null;
+        }
+        if (!expected.equals(apiKey)) {
             return Result.error401("Invalid API key");
         }
         return null;

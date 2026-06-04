@@ -37,8 +37,8 @@ import java.util.regex.Pattern;
 public class Astral3DScenesExampleController {
 
     private static final String ADMIN_KEY_HEADER = "X-H3D-Admin-Key";
-    private static final String TEMPLATE_PACKAGE_DIR = "example/scenes/packages";
-    private static final String TEMPLATE_SCREENSHOT_DIR = "example/scenes/screenshot";
+    private static final String TEMPLATE_PACKAGE_DIR = "upload/3DEditor/template/packages";
+    private static final String TEMPLATE_SCREENSHOT_DIR = "upload/3DEditor/template/screenshot";
     private static final Pattern TEMPLATE_KEY_PATTERN = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$");
 
     /**

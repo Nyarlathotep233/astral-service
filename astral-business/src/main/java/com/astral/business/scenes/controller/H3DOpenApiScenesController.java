@@ -203,7 +203,7 @@ public class H3DOpenApiScenesController {
         scene.setZipSize(resolveString(null, template == null ? null : template.getZipSize(), "0KB"));
         scene.setExampleSceneId(template == null ? null : template.getId());
         scene.setProjectType(resolveInteger(request.getProjectType(), template == null ? null : template.getProjectType(), 0));
-        scene.setCesiumConfig(resolveCesiumConfig(request.getCesiumConfig(), template));
+        scene.setGisConfig(resolveGisConfig(request.getGisConfig(), template));
         scene.setDelTag(0);
         scene.setSceneSource(SCENE_SOURCE_EXTERNAL);
         scene.setExternalSystem(externalSystem);
@@ -212,11 +212,11 @@ public class H3DOpenApiScenesController {
         return scene;
     }
 
-    private String resolveCesiumConfig(Object requestCesiumConfig, Astral3DScenesExample template) {
-        if (requestCesiumConfig != null) {
-            return toStoredJson(requestCesiumConfig);
+    private String resolveGisConfig(Object requestGisConfig, Astral3DScenesExample template) {
+        if (requestGisConfig != null) {
+            return toStoredJson(requestGisConfig);
         }
-        return template == null ? null : template.getCesiumConfig();
+        return template == null ? null : template.getGisConfig();
     }
 
     private Astral3DScenes findExternalScene(String externalSystem, String externalBizId) {
@@ -375,7 +375,7 @@ public class H3DOpenApiScenesController {
         private String sceneType;
         private String sceneIntroduction;
         private Integer projectType;
-        private Object cesiumConfig;
+        private Object gisConfig;
         private Object meta;
     }
 }

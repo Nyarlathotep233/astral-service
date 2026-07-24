@@ -59,13 +59,13 @@ public class Astral3DScenesExample {
     @TableField("zipSize")
     private String zipSize;
 
-    //示例项目类型。0：Web3D-THREE  1：WebGIS-Cesium
+    //示例项目类型。0：Web3D  1：WebGIS
     @TableField("projectType")
     private Integer projectType;
 
-    //WebGIS-Cesium 类型项目的基础Cesium配置
-    @TableField("cesiumConfig")
-    private String cesiumConfig;
+    //WebGIS 项目配置
+    @TableField("gisConfig")
+    private String gisConfig;
 
     //删除标记，0 未删除 1 已删除
     @TableField("delTag")

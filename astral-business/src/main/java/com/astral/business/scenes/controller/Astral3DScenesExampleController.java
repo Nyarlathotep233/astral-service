@@ -151,7 +151,7 @@ public class Astral3DScenesExampleController {
             template.setZip(templateZip);
             template.setZipSize(resolveString(null, scene.getZipSize(), "0KB"));
             template.setProjectType(scene.getProjectType() == null ? 0 : scene.getProjectType());
-            template.setCesiumConfig(scene.getCesiumConfig());
+            template.setGisConfig(scene.getGisConfig());
             template.setDelTag(0);
 
             if (!astral3DScenesExampleService.save(template)) {

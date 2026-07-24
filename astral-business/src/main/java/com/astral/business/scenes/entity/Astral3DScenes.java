@@ -55,13 +55,13 @@ public class Astral3DScenes {
     @TableField("exampleSceneId")
     private String exampleSceneId;
 
-    //项目类型。0：Web3D-THREE  1：WebGIS-Cesium
+    //项目类型。0：Web3D  1：WebGIS
     @TableField("projectType")
     private Integer projectType;
 
-    //WebGIS-Cesium 类型项目的基础Cesium配置
-    @TableField("cesiumConfig")
-    private String cesiumConfig;
+    //WebGIS 项目配置
+    @TableField("gisConfig")
+    private String gisConfig;
 
     //场景来源：INTERNAL 前端内部创建，EXTERNAL 外部系统创建
     @TableField("sceneSource")

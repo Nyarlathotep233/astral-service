@@ -2,6 +2,25 @@
 
 本地试验，2026-10-31；不合并、不部署。
 
+## 2026-11-01 文件回滚事故修正
+
+上轮缺失 ZIP 测试只检查了数据库字段，漏查了文件完整性。实际失败回滚根据请求 ZIP 推导父目录，
+将 `upload/renderer-version-intentional-missing.zip` 的父目录 `upload` 整体误删，损坏测试副本资源。
+原库和原资源未受影响。已从已有哈希一致备份补回 217 个初始文件；后续生成但未备份的测试 V5 单独列为未恢复。
+
+失败请求不能证明 ZIP/封面路径由本次上传且独占，因此回滚不再自动删除这些请求路径。
+这不是自动兜底或白模替换；真实错误照常返回，数据库和旧资源恢复流程保留。
+孤立上传文件宁可保留，之后经明确授权和引用核查清理。未修改成功保存的旧资源清理流程。
+
+`tools/SceneAssetRollbackCheck.java` 用临时目录中的旧文件、共享封面和无关场景模拟真实控制器更新：
+不存在的 ZIP 必须返回失败，所有原文件必须逐字节保留；修复前能复现删除，修复后通过。
+使用与 `SceneRendererRollbackCheck` 相同的编译/PropertiesLauncher 方式，main 改为
+`SceneAssetRollbackCheck`，另传入一个专用临时目录父路径，**禁止传业务上传目录**。
+
+完整事故与全量场景检查位于原前端仓库 `SCENE_OPEN_AUDIT_20261101.md` 和 `LOCAL_WEBGPU_ENVIRONMENT.md`。
+
+## 字段契约
+
 - `Astral3DScenes.rendererVersion` 对应 V5 新增可空列，取值 `webgl` / `webgpu`。
 - 语义：创建或最后成功保存场景的前端版本。不是实际渲染 API，也不是兼容性保证。
 - 原有 add/get/getAll/update 接口传递该字段，不增加新接口。

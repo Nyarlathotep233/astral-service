@@ -339,13 +339,10 @@ public class Astral3DScenesController {
             }
         }
 
-        // 删除本次新上传文件，避免失败后堆积垃圾文件
-        if (context.coverChanged && StringUtils.hasLength(context.newCoverPicture)) {
-            safeDelete(context.newCoverPicture);
-        }
-        if (context.zipChanged && StringUtils.hasLength(context.newZipFolder)) {
-            safeDelete(context.newZipFolder);
-        }
+        // The update request does not establish ownership of uploaded paths.
+        // In particular, a missing ZIP can have "upload" as its parent, and a
+        // supplied cover can already belong to another scene. Never delete
+        // request-supplied paths on failure; leave orphan cleanup explicit.
 
         restoreOldAssets(context);
         cleanupBackupAssets(context);
@@ -380,14 +377,6 @@ public class Astral3DScenesController {
             if (backupRootFile.exists()) {
                 org.apache.commons.io.FileUtils.deleteDirectory(backupRootFile);
             }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void safeDelete(String relativePath) {
-        try {
-            CommonUtils.deleteFile(relativePath);
         } catch (Exception e) {
             e.printStackTrace();
         }

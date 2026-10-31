@@ -32,6 +32,10 @@ public class Astral3DScenes {
     @TableField("sceneVersion")
     private Integer sceneVersion;
 
+    // 创建或最后一次成功保存场景的前端版本；历史未标记数据保留 null。
+    @TableField("rendererVersion")
+    private String rendererVersion;
+
     //场景描述
     @TableField("sceneIntroduction")
     private String sceneIntroduction;

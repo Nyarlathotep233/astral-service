@@ -8,6 +8,7 @@ import com.astral.common.constant.CommonConstant;
 import com.astral.common.result.Result;
 import com.astral.common.utils.CommonUtils;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.astral.business.scenes.entity.Astral3DScenes;
 import com.astral.business.scenes.service.Astral3DScenesService;
@@ -329,7 +330,10 @@ public class Astral3DScenesController {
         if (context.updated) {
             try {
                 oldScenes.setId(id);
-                astral3DScenesService.updateById(oldScenes);
+                // Include null: a failed first save must restore the historical
+                // unmarked state instead of leaving the new renderer label behind.
+                astral3DScenesService.update(oldScenes, new UpdateWrapper<Astral3DScenes>()
+                        .eq("id", id).set(oldScenes.getRendererVersion() == null, "rendererVersion", null));
             } catch (Exception e) {
                 e.printStackTrace();
             }

@@ -2,6 +2,9 @@ package com.astral.business.bim.controller;
 
 import com.alibaba.fastjson2.JSONObject;
 import com.astral.business.bim.entity.RvtConversionRequest;
+import com.astral.business.bim.entity.RvtConversionRequestOptions;
+import com.astral.common.config.AstralConfig;
+import com.astral.common.constant.CommonConstant;
 import com.astral.business.bim.entity.RvtConversionResult;
 import com.astral.common.result.Result;
 import com.astral.common.utils.CommonUtils;
@@ -12,6 +15,9 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.astral.business.bim.entity.Astral3DBimToGltf;
 import com.astral.business.bim.service.Astral3DBimToGltfService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.CollectionUtils;
@@ -20,6 +26,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 import javax.servlet.http.HttpServletRequest;
 import java.io.File;
 import java.io.IOException;
@@ -27,11 +34,12 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.text.SimpleDateFormat;
+import java.nio.file.LinkOption;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -41,6 +49,15 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/editor3d/bim2gltf")
 public class Astral3DBimToGltfController {
+    private static final Logger log = LoggerFactory.getLogger(Astral3DBimToGltfController.class);
+    private static final long CONVERSION_WAIT_NANOS = TimeUnit.MINUTES.toNanos(65);
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ExecutorService conversions = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "h3d-bim-conversion");
+        thread.setDaemon(true);
+        return thread;
+    });
+
     /**
      * 服务对象
      */
@@ -71,22 +88,14 @@ public class Astral3DBimToGltfController {
     public void init() {
         revitWs = new RevitWsClient(address, port, path, timeout);
         revitWs.start();
+    }
 
-        long reconnectInterval = 8 * 60 * 60 * 1000;
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-        Runnable reconnectTask = () -> {
-            try {
-                if (revitWs.isConnected()) {
-                    System.out.println("会话已打开，无需重连。");
-                    return;
-                }
-                revitWs.reconnect();
-            } catch (Exception e) {
-                e.printStackTrace();
-                System.out.println("重连时发生错误: " + e.getMessage());
-            }
-        };
-        scheduler.scheduleAtFixedRate(reconnectTask, 0, reconnectInterval, TimeUnit.MILLISECONDS);
+    @PreDestroy
+    public void stop() {
+        if (revitWs != null) revitWs.stop();
+        for (Runnable queued : conversions.shutdownNow()) {
+            failConversion((ConversionTask) queued, "服务停止，转换中断");
+        }
     }
 
     @PostMapping("/add")
@@ -96,116 +105,234 @@ public class Astral3DBimToGltfController {
 
     @PostMapping("/addAndConversion")
     public Result<?> addAndConversion(HttpServletRequest request, @RequestBody Map<String, Object> reqMap) {
-        ObjectMapper objectMapper = new ObjectMapper();
         try {
-            String jsonStr = JSONObject.toJSONString(reqMap);
-            RvtConversionRequest op = JSONObject.parseObject(jsonStr, RvtConversionRequest.class);
-            Astral3DBimToGltf v = JSONObject.parseObject(jsonStr, Astral3DBimToGltf.class);
-            v.setOptions(null);
-            v.setGltfFilePath("");
-            // 添加记录到数据库
-            if (!astral3DEditorBimToGltfService.save(v)) {
-                return Result.error("保存失败");
+            String json = JSONObject.toJSONString(reqMap);
+            RvtConversionRequest conversion = JSONObject.parseObject(json, RvtConversionRequest.class);
+            Astral3DBimToGltf item = JSONObject.parseObject(json, Astral3DBimToGltf.class);
+            if (conversion.getOptions() != null) {
+                conversion.getOptions().setUseDraco(true);
+                item.getOptions().put("useDraco", true);
             }
-            final Astral3DBimToGltf savedV = v;
-            // 启动异步转换任务
-            CompletableFuture.runAsync(() -> {
-                String uName = request.getParameter("uname");
-                String bimFilePath = _appPath + "/" + savedV.getBimFilePath();
+            item.setGltfFilePath("");
+            item.setConversionStatus(0);
+            if (!astral3DEditorBimToGltfService.save(item)) return Result.error("保存失败");
 
-                if (!revitWs.isConnected()) {
-                    wsocket.sendMessage(uName, JSONObject.toJSONString(Result.error("rvt 轻量化服务未连接")));
-                    return;
-                }
-                // 构造转换请求消息
-                RvtConversionRequest m = new RvtConversionRequest();
-                m.setFileId(savedV.getId());
-                m.setFilePath(bimFilePath);
-                m.setOptions(op.getOptions());
-                m.getOptions().setUseDraco(true);
-
-
-                try {
-                    String sm = JSONObject.toJSONString(m);
-//                    String sm = objectMapper.writeValueAsString(m);
-                    revitWs.sendMsg(sm);
-
-                    // 读取Revit消息
-                    String tmpGltfPath = "";
-                    while (true) {
-                        String msg = revitWs.readMsg();
-                        Map<String, Object> msgMap = objectMapper.readValue(msg, Map.class);
-                        if (!bimFilePath.equals(msgMap.get("filePath"))) {
-                            System.out.println("文件名对比: " + bimFilePath + " ---- " + msgMap.get("filePath"));
-                            continue;
-                        }
-                        String type = (String) msgMap.get("type");
-                        if ("progress".equals(type)) {
-                            // 处理进度消息
-                            BigDecimal progress = (BigDecimal)msgMap.get("progress");
-                            JSONObject webSocketMsg = new JSONObject();
-                            webSocketMsg.put("type", "bim2gltf");
-                            webSocketMsg.put("subscriber", uName);
-                            webSocketMsg.put("data", new RvtConversionResult("progress", savedV,  progress));
-                            wsocket.sendMessage(webSocketMsg.toJSONString());
-                            continue;
-                        } else if ("completed".equals(type)) {
-                            // 处理转换完成消息
-                            String gltfPath = (String) msgMap.get("gltfPath");
-                            savedV.setConversionDuration(new BigDecimal(msgMap.get("runSeconds").toString()));
-                            savedV.setConversionStatus(1);
-
-//                            String gltfFilePath = _appPath + savedV.getGltfFilePath();
-                            String gltfFileFolderPath = bimFilePath.substring(0, bimFilePath.lastIndexOf("/") + 1);
-                            String gltfFilePath = gltfFileFolderPath + gltfPath;
-                            tmpGltfPath = gltfFilePath;
-                            File gltfFile = new File(gltfFilePath);
-                            if (gltfFile.exists()) {
-                                savedV.setGltfFileSize(BigDecimal.valueOf(gltfFile.length()));
-                            }
-                            String uploadGltfDir = "upload/bim/bim2gltf";
-                            String uploadGltfPath = uploadGltfDir + "/" + gltfPath;
-//                            UpYunUtil.upload(upYunGltfPath, gltfFile);
-                            CommonUtils.upload(uploadGltfDir, gltfFile);
-                            savedV.setGltfFilePath(uploadGltfPath);
-                            // 更新数据库
-                            astral3DEditorBimToGltfService.updateById(savedV);
-                            // 发送完成消息
-                            JSONObject webSocketMsg = new JSONObject();
-                            webSocketMsg.put("type", "bim2gltf");
-                            webSocketMsg.put("subscriber", uName);
-                            webSocketMsg.put("data", new RvtConversionResult("completed", savedV,  BigDecimal.valueOf(100)));
-                            wsocket.sendMessage(webSocketMsg.toJSONString());
-                            break;
-                        } else if ("failed".equals(type)) {
-                            // 处理转换失败消息
-                            savedV.setGltfFilePath("");
-                            savedV.setConversionDuration(BigDecimal.valueOf(0));
-                            savedV.setConversionStatus(2);
-                            savedV.setGltfFileSize(BigDecimal.valueOf(0));
-                            // 更新数据库
-                            astral3DEditorBimToGltfService.updateById(savedV);
-                            // 发送失败消息
-                            JSONObject webSocketMsg = new JSONObject();
-                            webSocketMsg.put("type", "bim2gltf");
-                            webSocketMsg.put("subscriber", uName);
-                            webSocketMsg.put("data", new RvtConversionResult("failed", savedV,  BigDecimal.ZERO));
-                            wsocket.sendMessage(webSocketMsg.toJSONString());
-                            break;
-                        }
-                    }
-                    if (StringUtils.hasLength(tmpGltfPath)) {
-                        // 删除临时文件
-                        Files.deleteIfExists(Paths.get(tmpGltfPath));
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            });
-            return Result.success(savedV);
+            ConversionTask task = new ConversionTask(item, conversion.getOptions(), request.getParameter("uname"));
+            try {
+                conversions.execute(task);
+            } catch (RejectedExecutionException e) {
+                failConversion(task, "转换服务正在停止");
+                return Result.error("转换服务正在停止");
+            }
+            return Result.success(item);
         } catch (Exception e) {
-            e.printStackTrace();
-            return Result.error("fail->" + e.getMessage());
+            log.warn("BIM conversion request failed: {}", e.getClass().getSimpleName());
+            return Result.error(e.getMessage());
+        }
+    }
+
+    private final class ConversionTask implements Runnable {
+        final Astral3DBimToGltf item;
+        final RvtConversionRequestOptions options;
+        final String subscriber;
+        final AtomicBoolean terminal = new AtomicBoolean();
+
+        ConversionTask(Astral3DBimToGltf item, RvtConversionRequestOptions options, String subscriber) {
+            this.item = item;
+            this.options = options;
+            this.subscriber = subscriber;
+        }
+
+        @Override
+        public void run() {
+            convert(this);
+        }
+    }
+
+    private void convert(ConversionTask task) {
+        String archiveDirectory = null;
+        Path product = null;
+        boolean committed = false;
+        try {
+            Path source = resolveSource(task.item.getBimFilePath());
+            RvtConversionRequest message = new RvtConversionRequest();
+            message.setFileId(task.item.getId());
+            message.setFilePath(source.toString());
+            message.setOptions(task.options);
+            if (task.options == null) throw new IOException("转换配置为空");
+            task.options.setUseDraco(true);
+
+            long connection = revitWs.sendMsg(JSONObject.toJSONString(message));
+            long deadline = System.nanoTime() + CONVERSION_WAIT_NANOS;
+            while (true) {
+                JsonNode reply = objectMapper.readTree(awaitMessage(deadline, connection));
+                if (!isReplyFor(reply, message.getFileId(), message.getFilePath())) continue;
+                String type = reply.path("type").asText();
+                if ("progress".equals(type)) {
+                    sendUpdate(task, "progress", decimal(reply, "progress"), null);
+                } else if ("failed".equals(type)) {
+                    String reason = reply.path("message").asText("");
+                    throw new IOException(StringUtils.hasText(reason) ? reason : "RVT 转换失败");
+                } else if ("completed".equals(type)) {
+                    BigDecimal seconds = decimal(reply, "runSeconds");
+                    product = resolveProduct(source, reply.path("gltfPath").asText());
+                    // Each archive directory belongs only to this attempt, including partial upload failures.
+                    String candidate = "upload/bim/bim2gltf/" + UUID.randomUUID();
+                    prepareArchive(candidate);
+                    archiveDirectory = candidate;
+                    String archivePath = CommonUtils.upload(archiveDirectory, product.toFile(), false);
+                    task.item.setGltfFilePath(archivePath);
+                    task.item.setGltfFileSize(BigDecimal.valueOf(Files.size(product)));
+                    task.item.setConversionDuration(seconds);
+                    task.item.setConversionStatus(1);
+                    if (!astral3DEditorBimToGltfService.updateById(task.item)) {
+                        throw new IOException("转换产物记录更新失败");
+                    }
+                    committed = true;
+                    task.terminal.set(true);
+                    sendUpdate(task, "completed", BigDecimal.valueOf(100), null);
+                    try {
+                        Files.deleteIfExists(product);
+                    } catch (IOException e) {
+                        log.warn("BIM {} completed; temporary product cleanup failed", task.item.getId());
+                    }
+                    return;
+                } else {
+                    throw new IOException("转换服务返回未知消息类型");
+                }
+            }
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            if (committed) {
+                log.error("BIM {} completed; post-completion operation failed", task.item.getId());
+                return;
+            }
+            String reason = e instanceof InterruptedException ? "服务停止，转换中断" : e.getMessage();
+            if (archiveDirectory != null) {
+                try {
+                    rollbackArchive(archiveDirectory, product.getFileName().toString());
+                } catch (Exception rollbackError) {
+                    log.error("BIM {} archive rollback failed: {}: {}", task.item.getId(), rollbackError.getClass().getSimpleName(), logReason(rollbackError.getMessage()));
+                    reason = (reason == null ? "转换失败" : reason) + "；产物归档回滚失败";
+                }
+            }
+            log.warn("BIM {} conversion failed: {}: {}", task.item.getId(), e.getClass().getSimpleName(), logReason(reason));
+            failConversion(task, StringUtils.hasText(reason) ? reason : "RVT 转换失败");
+        }
+    }
+
+    private String awaitMessage(long deadline, long connection) throws IOException, InterruptedException {
+        while (true) {
+            if (!revitWs.isConnected() || revitWs.getConnectionVersion() != connection) {
+                throw new IOException("Revit 转换服务连接已断开，本次转换未完成");
+            }
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) throw new IOException("Revit 转换等待超过 65 分钟");
+            String message = revitWs.readMsg(Math.min(remaining, TimeUnit.SECONDS.toNanos(1)), TimeUnit.NANOSECONDS);
+            if (message != null) return message;
+        }
+    }
+
+    private String logReason(String reason) {
+        if (reason == null) return "No error message";
+        String redacted = reason.replaceAll("(?i)[a-z]:[\\\\/][^\\r\\n]*", "[local path]");
+        return redacted.replaceAll("(?i)(password|token|secret|authorization|api[-_]?key)\\s*[:=]\\s*[^\\s,;]+", "$1=[redacted]");
+    }
+
+    private static boolean isReplyFor(JsonNode reply, Long fileId, String filePath) throws IOException {
+        if (reply == null || !reply.path("fileId").isIntegralNumber() || !reply.path("fileId").canConvertToLong()
+                || !reply.path("filePath").isTextual()) {
+            throw new IOException("转换响应缺少有效的 fileId 或 filePath");
+        }
+        if (reply.get("fileId").longValue() != fileId.longValue()) return false;
+        if (!filePath.equals(reply.get("filePath").textValue())) throw new IOException("转换响应文件路径不匹配");
+        return true;
+    }
+
+    private static BigDecimal decimal(JsonNode reply, String field) throws IOException {
+        JsonNode value = reply.get(field);
+        if (value == null || (!value.isNumber() && !value.isTextual())) throw new IOException("转换响应数值无效: " + field);
+        try {
+            return new BigDecimal(value.asText());
+        } catch (NumberFormatException e) {
+            throw new IOException("转换响应数值无效: " + field);
+        }
+    }
+
+    private Path resolveSource(String relativePath) throws IOException {
+        if (!StringUtils.hasText(relativePath)) throw new IOException("RVT 源文件路径为空");
+        Path root = Paths.get(_appPath).toAbsolutePath().normalize();
+        Path sourceRoot = root.resolve("bim-sources").toRealPath();
+        Path relative = Paths.get(relativePath);
+        Path source = root.resolve(relative).normalize();
+        if (relative.isAbsolute() || !source.startsWith(root.resolve("bim-sources"))
+                || !source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".rvt")
+                || !Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("RVT 源文件路径无效");
+        }
+        source = source.toRealPath();
+        if (!sourceRoot.startsWith(root.toRealPath()) || !source.startsWith(sourceRoot)) throw new IOException("RVT 源文件不在源文件目录");
+        return source;
+    }
+
+    private static Path resolveProduct(Path source, String fileName) throws IOException {
+        if (!StringUtils.hasText(fileName) || fileName.contains("/") || fileName.contains("\\") || fileName.contains(":")
+                || !fileName.toLowerCase(Locale.ROOT).endsWith(".glb")) throw new IOException("转换产物文件名无效");
+        Path product = source.getParent().resolve(fileName).normalize();
+        if (!Files.isRegularFile(product, LinkOption.NOFOLLOW_LINKS)
+                || !product.toRealPath().getParent().equals(source.getParent())) throw new IOException("转换产物不存在或路径无效");
+        return product.toRealPath();
+    }
+
+    private void prepareArchive(String directory) throws IOException {
+        if (CommonConstant.UPLOAD_TYPE_UPYUN.equals(AstralConfig.getUploadType())) return;
+        Path root = Paths.get(AstralConfig.getUploadDir()).toAbsolutePath().normalize();
+        Files.createDirectories(root);
+        Path archive = root.resolve(directory).normalize();
+        Files.createDirectories(archive.getParent());
+        if (!archive.getParent().toRealPath().startsWith(root.toRealPath())) throw new IOException("产物归档目录无效");
+        Files.createDirectory(archive);
+    }
+
+    private void rollbackArchive(String directory, String fileName) throws IOException {
+        if (CommonConstant.UPLOAD_TYPE_UPYUN.equals(AstralConfig.getUploadType())) {
+            if (!CommonUtils.deleteFile(directory)) throw new IOException("产物归档回滚失败");
+            return;
+        }
+        Path uploadRoot = Paths.get(AstralConfig.getUploadDir()).toAbsolutePath().normalize();
+        Path archive = uploadRoot.resolve(directory).normalize();
+        Path file = archive.resolve(fileName).normalize();
+        if (!archive.startsWith(uploadRoot.resolve("upload/bim/bim2gltf")) || !file.getParent().equals(archive)) {
+            throw new IOException("产物回滚路径无效");
+        }
+        Files.deleteIfExists(file);
+        Files.deleteIfExists(archive);
+    }
+
+    private void failConversion(ConversionTask task, String reason) {
+        if (!task.terminal.compareAndSet(false, true)) return;
+        task.item.setConversionStatus(2);
+        task.item.setGltfFilePath("");
+        task.item.setGltfFileSize(BigDecimal.ZERO);
+        task.item.setConversionDuration(BigDecimal.ZERO);
+        try {
+            if (!astral3DEditorBimToGltfService.updateById(task.item)) throw new IllegalStateException("状态更新失败");
+        } catch (Exception e) {
+            reason += "；失败状态未能写入数据库";
+            log.error("BIM {} failure status update failed: {}: {}", task.item.getId(), e.getClass().getSimpleName(), logReason(e.getMessage()));
+        }
+        sendUpdate(task, "failed", BigDecimal.ZERO, reason);
+    }
+
+    private void sendUpdate(ConversionTask task, String status, BigDecimal progress, String message) {
+        JSONObject event = new JSONObject();
+        event.put("type", "bim2gltf");
+        event.put("subscriber", task.subscriber);
+        event.put("data", new RvtConversionResult(status, task.item, progress, message));
+        try {
+            wsocket.sendMessage(event.toJSONString());
+        } catch (Exception e) {
+            log.warn("BIM {} notification failed: {}", task.item.getId(), e.getClass().getSimpleName());
         }
     }
 
@@ -317,45 +444,37 @@ public class Astral3DBimToGltfController {
 
     @PostMapping("/uploadRvt")
     public Result<?> doRvtUpload(@RequestParam("file") MultipartFile file) {
-        if (file.isEmpty()) {
-            return Result.error("未获取到上传文件！");
-        }
-
-        String originalFilename = file.getOriginalFilename();
-        String fileExt = originalFilename.substring(originalFilename.lastIndexOf("."));
-        String fileName = originalFilename.substring(0, originalFilename.lastIndexOf("."));
-
-        if (!".rvt".equalsIgnoreCase(fileExt)) {
-            return Result.error("只能上传rvt文件！");
-        }
-
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd");
-        String currentDate = sdf.format(new Date());
-
-        // 存储的文件夹
-        String saveFolder = "static/tmp/bim/" + currentDate;
-        // 存储的路径
-        String newFileName = fileName + "-" + System.currentTimeMillis() + fileExt;
-        String savePath = saveFolder + "/" + newFileName;
-        // 保存位置在 static/upload, 没有文件夹要先创建
-        Path path = Paths.get(_appPath + "/" + saveFolder);
-        if (!Files.exists(path)) {
-            try {
-                path = Files.createDirectories(path);
-            } catch (IOException e) {
-                return Result.error("服务端创建文件夹" + currentDate + "失败！error=" + e.getMessage());
-            }
-        }
-
+        if (file.isEmpty()) return Result.error("未获取到上传文件！");
         try {
-            file.transferTo(new File(path.toAbsolutePath().toString() + "/" + newFileName));
-//            file.transferTo(new File("static/upload/" + savePath));
-            return Result.success("上传成功", savePath);
-        } catch (IOException e) {
-            e.printStackTrace();
-            return Result.error("服务器端文件保存失败！error=" + e.getMessage());
+            String fileName = safeSourceName(file.getOriginalFilename());
+            Path appRoot = Paths.get(_appPath).toAbsolutePath().normalize().toRealPath();
+            Path sourceRoot = appRoot.resolve("bim-sources");
+            Files.createDirectories(sourceRoot);
+            if (!sourceRoot.toRealPath().startsWith(appRoot)) throw new IOException("RVT 源文件目录无效");
+            String directory = UUID.randomUUID().toString();
+            Path sourceDirectory = Files.createDirectory(sourceRoot.resolve(directory));
+            Path target = sourceDirectory.resolve(fileName);
+            try (java.io.InputStream input = file.getInputStream()) {
+                Files.copy(input, target);
+            } catch (IOException e) {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(sourceDirectory);
+                throw e;
+            }
+            return Result.success("上传成功", "bim-sources/" + directory + "/" + fileName);
+        } catch (Exception e) {
+            log.warn("RVT source upload failed: {}", e.getClass().getSimpleName());
+            return Result.error(e.getMessage());
         }
     }
 
+    private static String safeSourceName(String original) throws IOException {
+        if (!StringUtils.hasText(original)) throw new IOException("未获取到文件名");
+        String name = original.replace('\\', '/');
+        name = name.substring(name.lastIndexOf('/') + 1).trim();
+        if (!name.toLowerCase(Locale.ROOT).endsWith(".rvt")) throw new IOException("只能上传rvt文件！");
+        name = name.replaceAll("[<>:|?*\\p{Cntrl}]", "_").replace('"', '_');
+        if (name.matches("(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])\\..*")) name = "_" + name;
+        return name;
+    }
 }
-

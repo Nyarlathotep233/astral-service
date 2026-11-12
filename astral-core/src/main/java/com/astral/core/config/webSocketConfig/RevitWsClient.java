@@ -1,180 +1,152 @@
 package com.astral.core.config.webSocketConfig;
 
-import com.astral.common.utils.CommonUtils;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import javax.annotation.PostConstruct;
 import javax.websocket.*;
 import java.io.IOException;
 import java.net.URI;
-import java.util.Objects;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
-@Component
 @ClientEndpoint
 public class RevitWsClient {
+    private static final Logger log = LoggerFactory.getLogger(RevitWsClient.class);
 
-    private Session session;
-    private String address;
-    private String port;
-    private String path;
-    private int timeout;
-
-    // 使用BlockingQueue作为消息队列
-    private final BlockingQueue<String> sendMsgQueue = new LinkedBlockingQueue<>();
-
-    private final BlockingQueue<String> recvMsgQueue = new LinkedBlockingQueue<>();
-
-    private WebSocketContainer container;
-
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-
-    public RevitWsClient() {
-
-    }
+    private volatile Session session;
+    private final String address;
+    private final String port;
+    private final String path;
+    private final int timeout;
+    private volatile boolean running;
+    private volatile long lastHeartbeat;
+    private final long heartbeatIntervalMillis;
+    private final long maintenanceIntervalMillis;
+    private final Object sendLock = new Object();
+    private final AtomicLong connectionVersion = new AtomicLong();
+    private final BlockingQueue<String> messages = new LinkedBlockingQueue<>();
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "h3d-revit-connection");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public RevitWsClient(String address, String port, String path, int timeout) {
         this.address = address;
         this.port = port;
         this.path = path;
         this.timeout = timeout;
+        heartbeatIntervalMillis = timeout > 0 ? Math.max(1, Math.min(30000L, timeout / 3L)) : 30000L;
+        maintenanceIntervalMillis = Math.max(1, Math.min(5000L, heartbeatIntervalMillis / 2));
     }
 
-    public void start() {
+    public synchronized void start() {
+        if (running) return;
+        running = true;
+        scheduler.scheduleWithFixedDelay(this::maintainConnection, 0, maintenanceIntervalMillis, TimeUnit.MILLISECONDS);
+    }
+
+    private void maintainConnection() {
+        if (!running) return;
         try {
-            URI uri = new URI("ws://" + address + ":" + port + path);
-            container = ContainerProvider.getWebSocketContainer();
-            container.setDefaultMaxSessionIdleTimeout(timeout);
-            session = container.connectToServer(this, uri);
+            if (!isConnected()) {
+                WebSocketContainer container = ContainerProvider.getWebSocketContainer();
+                container.setDefaultMaxSessionIdleTimeout(timeout);
+                container.connectToServer(this, new URI("ws://" + address + ":" + port + path));
+            } else if (System.nanoTime() - lastHeartbeat >= TimeUnit.MILLISECONDS.toNanos(heartbeatIntervalMillis)) {
+                sendMsg("ping");
+                lastHeartbeat = System.nanoTime();
+            }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.debug("Revit connection unavailable: {}: {}", e.getClass().getSimpleName(), e.getMessage());
         }
-    }
-
-    private void startHeartbeat() {
-        scheduler.scheduleAtFixedRate(() -> {
-            try {
-                if (session != null && session.isOpen()) {
-                    session.getBasicRemote().sendText("ping");
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }, 0, 30, TimeUnit.SECONDS); // 每 30 秒发送一次心跳
-    }
-
-    public void reconnect() {
-        if (session != null && session.isOpen()) {
-            try {
-                session.close();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-        start();
     }
 
     public boolean isConnected() {
-        return session != null && session.isOpen();
+        Session current = session;
+        return current != null && current.isOpen();
+    }
+
+    public long getConnectionVersion() {
+        return connectionVersion.get();
     }
 
     @OnOpen
-    public void onOpen(Session session) {
-        this.session = session;
-        System.out.println("Connected to Revit WebSocket server");
-        startHeartbeat();
+    public void onOpen(Session opened) {
+        synchronized (sendLock) {
+            if (running) {
+                messages.clear();
+                session = opened;
+                connectionVersion.incrementAndGet();
+                lastHeartbeat = System.nanoTime();
+                log.info("Revit conversion service connected");
+                return;
+            }
+        }
+        closeSession(opened);
     }
 
     @OnMessage
-    public void onMessage(String message) {
-        System.out.println("Received message from Revit: " + message);
-        try {
-            if(Objects.equals(message, "pong")) return;
-
-            if(CommonUtils.isJsonValid(message)){
-                recvMsgQueue.put(message);
-            }
-        } catch (InterruptedException e) {
-            System.err.println("Failed to save message: " + e.getMessage());
-        }
+    public void onMessage(String message, Session sender) {
+        if (sender == session && !"pong".equals(message)) messages.offer(message);
     }
 
     @OnClose
-    public void onClose(Session session, CloseReason closeReason) {
-        System.out.println("Disconnected from Revit WebSocket server: " + closeReason);
-//        this.session = null;
-        reconnect();
+    public void onClose(Session closed, CloseReason reason) {
+        invalidate(closed);
     }
 
     @OnError
-    public void onError(Session session, Throwable throwable) {
-        System.out.println("WebSocket error: " + throwable.getMessage());
+    public void onError(Session failed, Throwable error) {
+        invalidate(failed);
+        closeSession(failed);
+        log.warn("Revit connection error: {}: {}", error.getClass().getSimpleName(), error.getMessage());
     }
 
-
-    /**
-     * 服务器端推送消息
-     */
-    public void sendMsg(String message) {
-        try {
-            // 将消息放入队列
-            sendMsgQueue.put(message);
-            startMessageSender();
-        } catch (InterruptedException e) {
-            // 处理中断异常
-            Thread.currentThread().interrupt();
-            System.err.println("Failed to send message: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 服务器端推送消息
-     */
-    public void pushMessage(String message) {
-        if (session != null && session.isOpen()) {
-            try {
-                synchronized (session){
-                    session.getBasicRemote().sendText(message);
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
+    private void invalidate(Session previous) {
+        synchronized (sendLock) {
+            if (previous != null && session == previous) {
+                session = null;
+                connectionVersion.incrementAndGet();
             }
         }
     }
 
-    /**
-     * 启动一个线程从队列中取出消息并发送
-     */
-    public void startMessageSender() {
-        Thread senderThread = new Thread(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    // 从队列中取出消息
-                    String msg = sendMsgQueue.take();
-                    pushMessage(msg);
-                } catch (InterruptedException e) {
-                    // 处理中断异常
-                    Thread.currentThread().interrupt();
-                    System.err.println("Message sender thread interrupted: " + e.getMessage());
-                }
-            }
-        });
-        senderThread.setDaemon(true); // 设置为守护线程
-        senderThread.start();
-    }
-
-
-    public String readMsg() {
+    public long sendMsg(String message) throws IOException {
+        Session current = null;
         try {
-            // 从队列中取出消息，如果队列为空则阻塞
-            return recvMsgQueue.take();
-        } catch (InterruptedException e) {
-            // 处理中断异常
-            Thread.currentThread().interrupt();
-            System.err.println("Failed to read message: " + e.getMessage());
-            return "";
+            synchronized (sendLock) {
+                current = session;
+                if (current == null || !current.isOpen()) throw new IOException("Revit 转换服务未连接");
+                current.getBasicRemote().sendText(message);
+                return connectionVersion.get();
+            }
+        } catch (IOException | RuntimeException e) {
+            invalidate(current);
+            closeSession(current);
+            throw e;
         }
     }
 
+    public String readMsg(long wait, TimeUnit unit) throws InterruptedException {
+        return messages.poll(wait, unit);
+    }
+
+    public synchronized void stop() {
+        running = false;
+        scheduler.shutdownNow();
+        Session current = session;
+        invalidate(current);
+        closeSession(current);
+        messages.clear();
+    }
+
+    private void closeSession(Session current) {
+        if (current == null) return;
+        try {
+            current.close();
+        } catch (IOException e) {
+            log.debug("Revit connection close failed: {}", e.getClass().getSimpleName());
+        }
+    }
 }

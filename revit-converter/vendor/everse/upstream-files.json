@@ -1,0 +1,134 @@
+[
+  {
+    "path": "Core\\GlTFExportContext.cs",
+    "upstreamSha256": "3E4D5660E407593994819097AAB2A95AC4307E83BB8AD4B12DD560375FB5258B"
+  },
+  {
+    "path": "Core\\ProcessGeometry.cs",
+    "upstreamSha256": "359B5AFD40A890C6ED7A665E31921A4520C91727B415B358EDEAFDAC19994A17"
+  },
+  {
+    "path": "EportUtils\\ElementValidations.cs",
+    "upstreamSha256": "2F01CA49F1B544FB7C97EED0CC5EE90DAF564B4637F16418AA47BC03937A332D"
+  },
+  {
+    "path": "Export\\BinFile.cs",
+    "upstreamSha256": "F45F238ED1F3EDEF76CA2C1A34A1751D54EA81D259A2862233FDA035845FD502"
+  },
+  {
+    "path": "Export\\BufferConfig.cs",
+    "upstreamSha256": "AF54504D2E61CAB63EC6A22AB20E8A627155F8CF671856DD8EB69FA316C1117F"
+  },
+  {
+    "path": "Export\\FileExport.cs",
+    "upstreamSha256": "E41617036BD76218D61B66D332EF86FA444B98453722BEA46BEB04AFF388D928"
+  },
+  {
+    "path": "Export\\GlbFile.cs",
+    "upstreamSha256": "EFEFB7E0EEAA53444E009CF10D9FF3945BA9B490544CA81C2461B3094BA75497"
+  },
+  {
+    "path": "Export\\GlbBinInfo.cs",
+    "upstreamSha256": "5527E442F4F9AC21481E6825DDBA5B28F505B319003FCE72F884E224C76E1594"
+  },
+  {
+    "path": "Export\\GlbJsonInfo.cs",
+    "upstreamSha256": "B5174833848B1751EC65D45F36D3A9CF34EEF9B85E7B7D42FE00F064C8E2A5F6"
+  },
+  {
+    "path": "Export\\GlbHeaderInfo.cs",
+    "upstreamSha256": "99752DBF9EBBE308E02A517AA840B570FCF846B6AB5BFA8BCEF1C6F359BBD93D"
+  },
+  {
+    "path": "Export\\GltfJson.cs",
+    "upstreamSha256": "EA48309FD51E66E59B9AC157DB90B8A4C652C60F3AF84A1C7B4C03A41AE3D110"
+  },
+  {
+    "path": "Export\\RevitGrids.cs",
+    "upstreamSha256": "72802EADEA861ACF3906022CDA20CFDBF3C4EFE4C4772A0E957FA49B61E03EF5"
+  },
+  {
+    "path": "Materials\\AssetProperties.cs",
+    "upstreamSha256": "E7EBCE37888B71A3EFE81111BC8B311B9A089C1B02A06522A25A3C06F4BFCBFA"
+  },
+  {
+    "path": "Materials\\BitmapsUtils.cs",
+    "upstreamSha256": "9B690F5D6C904BD8DFA03594A0E5F570C0FF1E73A77648A71BB7294FBA5C465A"
+  },
+  {
+    "path": "Materials\\MaterialProperties.cs",
+    "upstreamSha256": "281A29AE5CA9499561178216422DCFA4A5A1496E178491492D0B63A6DC2BEA11"
+  },
+  {
+    "path": "Materials\\MaterialTextures.cs",
+    "upstreamSha256": "E869DCC3C8A1B043C3CC8DEF551EB706709518CF3673A744C941372C40CCBB28"
+  },
+  {
+    "path": "Materials\\RevitMaterials.cs",
+    "upstreamSha256": "CDD642DFE437AB41816D91B881CE891E9833AE3742D8D479970D670DC3EB9542"
+  },
+  {
+    "path": "Materials\\TextureLocation.cs",
+    "upstreamSha256": "AF110ED693FD4A6DE27405B50AEDB955E765B6DC28E3A732A10CEAAF29EFDF6B"
+  },
+  {
+    "path": "Model\\GlbComponents.cs",
+    "upstreamSha256": "808B6D77987992AD4E0B53AC6B80A88B4DF712750A9B0E01023551032F230AF4"
+  },
+  {
+    "path": "Model\\RevitGridParametersObject.cs",
+    "upstreamSha256": "41E18ED11A142E90A1FEBD89F490CF6D3D4A86DE99CAA92CEB36533D8AA6F06B"
+  },
+  {
+    "path": "Model\\PointIntObject.cs",
+    "upstreamSha256": "C916AB95868881D5747EB1865CB080359A0AE2A41009CF62AB757F3B99CA8353"
+  },
+  {
+    "path": "Model\\VertexLookupIntObject.cs",
+    "upstreamSha256": "50F7A8E58DB22F5773425773135F4C15894DE0623B9A4F53AEF2176775529846"
+  },
+  {
+    "path": "Transform\\ModelRotation.cs",
+    "upstreamSha256": "7C08C6664DA14083CA1F1A3DD5BCA83E13F234DB3C3F6D7E99083F619CFE3E44"
+  },
+  {
+    "path": "Transform\\ModelScale.cs",
+    "upstreamSha256": "EE9726DBC9C0B4E32B5F78806171F480CD8B2272FB0854DF341902EB3BA8A0AD"
+  },
+  {
+    "path": "Transform\\ModelTraslation.cs",
+    "upstreamSha256": "D953348123B121CEC94C72B259E5B707EB18157A13D21DD69F51B9E502E024CE"
+  },
+  {
+    "path": "Utils\\MaterialUtils.cs",
+    "upstreamSha256": "6200A76BA763BE7FDD4EB56AE2F0A2C5638B21F2E2080625D40CDBBEAB8725C2"
+  },
+  {
+    "path": "Utils\\GeometryUtils.cs",
+    "upstreamSha256": "255CABDE1221151BEA5496777131D2FD9793745CC686294578C92910608C9234"
+  },
+  {
+    "path": "Utils\\GLTFBinaryDataUtils.cs",
+    "upstreamSha256": "73CAC442FDFEE7192D3FDC29EB29677FDF391B97964021492495A3A2CCC3337E"
+  },
+  {
+    "path": "Utils\\RevitIniReader.cs",
+    "upstreamSha256": "198D213EB89E6331C44C2303147BAB6C2BD100AF3E4005C4A47C653CB323E9D4"
+  },
+  {
+    "path": "Utils\\Collectors.cs",
+    "upstreamSha256": "3C516B6B3004CEBF52B9A16E95F5F073ADD6F002EE43114AF5EA093CA543BC9D"
+  },
+  {
+    "path": "Utils\\Util.cs",
+    "upstreamSha256": "A56EA6D125F6EB81F0EB468386364E45A87EFFDAD0A3AD2B4452C3ABF11D9594"
+  },
+  {
+    "path": "Utils\\glTFExportUtils.cs",
+    "upstreamSha256": "5AA600B9655E258901C5EEEAB3AEE917C37175642932184AE13F2FFC9D5BE812"
+  },
+  {
+    "path": "Windows\\MainWindow\\Preferences.cs",
+    "upstreamSha256": "3F04D4CB06FEC3BBE6D3B2059810DE59780FDB1F6CEA25E00B75D846100A4B4C"
+  }
+]

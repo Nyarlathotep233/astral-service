@@ -1,0 +1,2 @@
+# Preserve upstream bytes for the SHA-256 audit, including original line endings.
+*.cs -text whitespace=cr-at-eol,-blank-at-eol,-blank-at-eof

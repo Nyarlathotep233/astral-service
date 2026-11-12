@@ -20,6 +20,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.*;
 import java.net.URLDecoder;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 @RestController
 @RequestMapping("/common")
@@ -71,6 +73,13 @@ public class CommonController {
                 // 先将加号替换为URL编码形式，避免被转为空格
                 filePath = filePath.replaceAll("\\+", "%2B");
                 filePath = URLDecoder.decode(filePath, "UTF-8");
+                Path uploadRoot = Paths.get(AstralConfig.getUploadDir()).toRealPath();
+                Path resolvedFile = Paths.get(filePath).toRealPath();
+                if (!resolvedFile.startsWith(uploadRoot)) {
+                    response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                    return;
+                }
+                filePath = resolvedFile.toString();
                 File file = new File(filePath);
                 if (!file.exists() || !file.isFile()) {
                     response.setStatus(HttpServletResponse.SC_NOT_FOUND);

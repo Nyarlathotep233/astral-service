@@ -1,12 +1,11 @@
 package com.astral.business.bim.entity;
 
 
-import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.FastjsonTypeHandler;
+import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -15,6 +14,7 @@ import org.apache.ibatis.type.JdbcType;
 import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.Date;
+import java.util.Map;
 
 /**
  * BIM模型轻量化(Astral3DBimToGltf)表实体类
@@ -44,8 +44,8 @@ public class Astral3DBimToGltf implements Serializable{
     //转换时长（s）
     private BigDecimal conversionDuration;
     //转换配置
-    @TableField(typeHandler = FastjsonTypeHandler.class, jdbcType = JdbcType.LONGNVARCHAR)
-    private JSONObject options;
+    @TableField(typeHandler = JacksonTypeHandler.class, jdbcType = JdbcType.LONGNVARCHAR)
+    private Map<String, Object> options;
     //删除标记，0 未删除 1 已删除
     @TableField("delTag")
     private Integer delTag;

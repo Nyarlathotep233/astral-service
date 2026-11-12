@@ -1,0 +1,19 @@
+{
+  "name": "h3d-revit-converter",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/service.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=22" },
+  "overrides": { "sharp": "0.34.5" },
+  "dependencies": {
+    "@gltf-transform/core": "4.3.0",
+    "@gltf-transform/extensions": "4.3.0",
+    "@gltf-transform/functions": "4.3.0",
+    "draco3d": "1.5.7",
+    "ws": "8.18.1"
+  }
+}

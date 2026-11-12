@@ -17,5 +17,10 @@ public class RvtConversionResult {
 
     private BigDecimal process;
 
+    private String message;
+
+    public RvtConversionResult(String conversionStatus, Astral3DBimToGltf item, BigDecimal process) {
+        this(conversionStatus, item, process, null);
+    }
 
 }

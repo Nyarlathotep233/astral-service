@@ -94,8 +94,19 @@ public class Astral3DBimToGltfController {
         return Result.toAjax(astral3DEditorBimToGltfService.save(lb3dEditorBimToGltf));
     }
 
+    @GetMapping("/status")
+    public Result<?> converterStatus() {
+        Map<String, Object> status = new HashMap<>();
+        status.put("available", revitWs != null && revitWs.isConnected());
+        status.put("dependency", "Revit converter");
+        return Result.success(status);
+    }
+
     @PostMapping("/addAndConversion")
     public Result<?> addAndConversion(HttpServletRequest request, @RequestBody Map<String, Object> reqMap) {
+        if (revitWs == null || !revitWs.isConnected()) {
+            return Result.error(503, "Revit converter dependency unavailable；转换服务未连接，未创建转换任务");
+        }
         ObjectMapper objectMapper = new ObjectMapper();
         try {
             String jsonStr = JSONObject.toJSONString(reqMap);

@@ -4,6 +4,7 @@ import com.astral.common.config.AstralConfig;
 import com.astral.common.config.UpyunConfig;
 import com.astral.common.constant.CommonConstant;
 import com.astral.common.result.Result;
+import com.astral.common.service.LegacySceneUploads;
 import com.astral.common.utils.*;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.MediaType;
@@ -24,6 +25,11 @@ import java.net.URLDecoder;
 @RestController
 @RequestMapping("/common")
 public class CommonController {
+    private final LegacySceneUploads legacySceneUploads;
+
+    public CommonController(LegacySceneUploads legacySceneUploads) {
+        this.legacySceneUploads = legacySceneUploads;
+    }
 
     @GetMapping("/download")
     public void download(String fileUrl, HttpServletRequest request, HttpServletResponse response) throws Exception {
@@ -159,6 +165,8 @@ public class CommonController {
         try {
             String bizPath = request.getParameter("biz");
             String type = request.getParameter("type");
+            String conflict = legacySceneUploads.reserve(bizPath, file);
+            if (conflict != null) return Result.error(409, conflict);
 
             // 是否为文件名添加时间戳后缀
             boolean needTimestampSuffix = !(bizPath != null && bizPath.contains("upload/3DEditor"));

@@ -21,6 +21,9 @@ public class CommonUtils {
         String result = "";
         try {
             if (CommonConstant.UPLOAD_TYPE_UPYUN.equals(defaultUploadType)) {
+                if (!needTimestampSuffix && (bizPath.startsWith("upload/3DEditor/scene/") || bizPath.startsWith("upload/3DEditor/screenshot/"))) {
+                    return UpYunUtil.uploadScenePart(bizPath, file);
+                }
                 result = UpYunUtil.upload(bizPath, FileUtils.convertFile(file,needTimestampSuffix));
             } else {
                 result = FileUploadUtils.upload(bizPath, file,needTimestampSuffix);

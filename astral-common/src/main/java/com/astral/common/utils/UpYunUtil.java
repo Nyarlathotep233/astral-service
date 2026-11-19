@@ -11,6 +11,8 @@ import org.springframework.util.StringUtils;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import org.springframework.web.multipart.MultipartFile;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -56,6 +58,23 @@ public class UpYunUtil {
 
     public static void setDomain(String domain) {
         UpYunUtil.domain = domain;
+    }
+
+    public static String uploadScenePart(String directory, MultipartFile file) throws IOException, UpException {
+        // Stream each request directly: the legacy helper used a shared local
+        // temporary filename and a directory-only object key for different parts.
+        String name = file.getOriginalFilename();
+        if (!StringUtils.hasText(name) || name.contains("/") || name.contains("\\") || name.equals("..") || name.equals(".")) {
+            throw new IOException("场景资源需要有效的文件名");
+        }
+        String prefix = AstralConfig.getUploadDir();
+        String key = (StringUtils.hasText(prefix) ? prefix + "/" : "") + directory + "/" + name;
+        try (InputStream stream = file.getInputStream()) {
+            if (!new UpYun(bucket, operator, password).writeFile(key.startsWith("/") ? key : "/" + key, stream, true, null)) {
+                throw new IOException("场景资源上传失败");
+            }
+        }
+        return key;
     }
 
     public static String upload(String savePath, File file) {

@@ -8,6 +8,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Objects;
 
@@ -46,8 +47,20 @@ public class FileUploadUtils {
             fileName = file.getOriginalFilename();
         }
 
-        String absPath = getAbsoluteFile(baseDir, fileName).getAbsolutePath();
-        file.transferTo(Paths.get(absPath));
+        Path destination = getAbsoluteFile(baseDir, fileName).toPath();
+        if (!needTimestampSuffix && (baseDir.startsWith("upload/3DEditor/scene/") || baseDir.startsWith("upload/3DEditor/screenshot/"))) {
+            // Identical legacy retries may run concurrently. Expose only complete
+            // files, even if the second request fails halfway through transfer.
+            Path temp = Files.createTempFile(destination.getParent(), ".scene-upload-", ".part");
+            try {
+                file.transferTo(temp);
+                Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                Files.deleteIfExists(temp);
+            }
+        } else {
+            file.transferTo(destination);
+        }
         return getPathFileName(baseDir, fileName);
     }
 
